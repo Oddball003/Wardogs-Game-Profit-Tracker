@@ -1,3 +1,11 @@
+# Wardogs-Game-Profit-Tracker
+
+A Vibe Coded Python program to track your current game profits or loss
+
+This Uses steam mini profile to grab the profit with a web browser it will use your default if its chrome based if not it will use edge
+it also allows you to connect to obs and change the color of text based on if you are in profit or loss
+downsides you need to login to steam for to not get limited but due to this it auto grabs the mini profile link and can view the number even if your profile is private
+this is 100% vibe coded i probably cant support this long term if some wants to take this over thats ok with me
 # Wardogs Profit Tracker
 
 A small Windows app for streamers playing WARDOGS. It reads your Steam rich
