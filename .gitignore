@@ -10,3 +10,6 @@ dist/
 *.spec
 __pycache__/
 *.pyc
+
+# notes for Claude Code - kept local
+CLAUDE.md
