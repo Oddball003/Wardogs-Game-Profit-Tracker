@@ -1,0 +1,12 @@
+# personal data - never commit
+settings.json
+steam_browser_profile/
+.wardogs.lock
+*.tmp
+
+# build output
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
