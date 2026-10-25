@@ -38,5 +38,4 @@ otherwise Edge or Chrome. The OBS password is stored encrypted with Windows DPAP
 
 ## Remove
 
-- `remove_old_exe.bat` - deletes the built exe (optionally settings and sign-in).
 - `uninstall.bat` - removes the exe, settings, sign-in and optionally the build tools.
