@@ -33,6 +33,7 @@ for %%D in ("%~dp0." "%~dp0dist") do (
     )
     if exist "%%~D\%EXE%"              del /f /q "%%~D\%EXE%"
     if exist "%%~D\settings.json"      del /f /q "%%~D\settings.json"
+    if exist "%%~D\activity_log.txt"   del /f /q "%%~D\activity_log.txt"
     if exist "%%~D\steam_browser_profile" rmdir /s /q "%%~D\steam_browser_profile"
     if exist "%%~D\.wardogs.lock"      del /f /q "%%~D\.wardogs.lock"
 )

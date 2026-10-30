@@ -27,6 +27,8 @@ else:
 
 SETTINGS_FILE = os.path.join(HERE, "settings.json")
 PROFILE_DIR = os.path.join(HERE, "steam_browser_profile")
+LOG_FILE = os.path.join(HERE, "activity_log.txt")
+LOG_FILE_MAX = 1_000_000  # bytes; trimmed to the newest half at startup
 LOGIN_URL = "https://steamcommunity.com/login/home/"
 
 MIN_INTERVAL = 10  # seconds - fastest allowed refresh
@@ -362,6 +364,30 @@ def signed_in(ctx):
     return any(c["name"] == "steamLoginSecure" for c in ctx.cookies("https://steamcommunity.com"))
 
 
+def cookie_jar_from_context(ctx):
+    """Copies the browser's Steam cookies into a plain Python cookie jar, so
+    refreshes don't need the browser (a throttled background browser can
+    stall without ever timing out)."""
+    from http.cookiejar import Cookie, CookieJar
+    jar = CookieJar()
+    for c in ctx.cookies():
+        if "steam" not in c["domain"]:
+            continue
+        session = c.get("expires", -1) < 0
+        jar.set_cookie(Cookie(
+            0, c["name"], c["value"], None, False,
+            c["domain"], True, c["domain"].startswith("."),
+            c.get("path", "/"), True, c.get("secure", False),
+            None if session else int(c["expires"]), session,
+            None, None, {"HttpOnly": None} if c.get("httpOnly") else {}))
+    return jar
+
+
+def jar_signed_in(jar):
+    jar.clear_expired_cookies()
+    return any(c.name == "steamLoginSecure" for c in jar)
+
+
 class Worker(threading.Thread):
     def __init__(self, app):
         super().__init__(daemon=True)
@@ -423,17 +449,22 @@ class Worker(threading.Thread):
             self.emit("stopped", self)
             return
         try:
+            # the browser is only needed to sign in and read the cookies
             with sync_playwright() as pw:
                 try:
-                    self.loop(pw)
+                    jar = self.sign_in(pw)
                 finally:
-                    self.close_obs()
                     self.close_ctx()
+            if jar is not None:
+                self.loop(jar)
         except Exception as e:
             self.log(f"Stopped: {e}", "#FF8A7A")
+        finally:
+            self.close_obs()
         self.emit("stopped", self)
 
-    def loop(self, pw):
+    def sign_in(self, pw):
+        """Returns a cookie jar for the signed-in Steam account, or None."""
         ctx = self.ctx = launch_browser(pw, headless=True, log=self.log)
         need_login = self.force_login or not signed_in(ctx)
         if need_login:
@@ -441,17 +472,22 @@ class Worker(threading.Thread):
             if self.force_login:
                 shutil.rmtree(PROFILE_DIR, ignore_errors=True)
             if not self.login(pw):
-                return
+                return None
             ctx = self.ctx = launch_browser(pw, headless=True)
         my_url, sid64 = miniprofile_url_from_cookies(ctx)
         if my_url:
             self.log(f"Signed-in account: SteamID64 {sid64} → {my_url}")
             self.emit("account", my_url)
-        # fetch the page directly with the browser's cookies (no rendering,
-        # no images) - much lighter than loading it in a tab
-        req = ctx.request
+        return cookie_jar_from_context(ctx)
+
+    def loop(self, jar):
+        import urllib.request
+        # plain HTTP with the Steam cookies: no browser, hard 20 s timeout
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         headers = {"Cache-Control": "no-cache", "Pragma": "no-cache",
-                   "Referer": "https://steamcommunity.com/"}
+                   "Referer": "https://steamcommunity.com/",
+                   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                 "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"}
         obs_conn = None        # (host, port, password) the OBS connection was made with
         obs_color_sent = None  # (source, color) last sent to OBS
         obs_warned = False
@@ -480,14 +516,10 @@ class Worker(threading.Thread):
                 if not re.match(r"https?://", url, re.IGNORECASE):
                     url = "https://" + url
                 url += f"{'&' if '?' in url else '?'}_={int(time.time() * 1000)}"
-                resp = req.get(url, headers=headers, timeout=20000)
-                try:
-                    if resp.status >= 400:
-                        raise RuntimeError(f"HTTP {resp.status} from Steam")
-                    html = resp.text()
-                    landed_on_login = "/login" in resp.url
-                finally:
-                    resp.dispose()
+                # HTTP errors (4xx/5xx) raise and are retried below
+                with opener.open(urllib.request.Request(url, headers=headers), timeout=20) as resp:
+                    html = resp.read().decode("utf-8", errors="replace")
+                    landed_on_login = "/login" in resp.geturl()
                 raw = parse_presence(html)
                 text = extract_money(raw, cfg["space"])
                 kept = False
@@ -531,7 +563,7 @@ class Worker(threading.Thread):
 
                 # Steam drops the sign-in cookie (or redirects to login) when the
                 # session ends; signed-out pages can show stale text
-                if landed_on_login or not signed_in(ctx):
+                if landed_on_login or not jar_signed_in(jar):
                     if not signed_out_warned:
                         self.log("Signed out of Steam — the amount may be stale. "
                                  "Click \"Sign in again\".", "#FACC15")
@@ -668,6 +700,7 @@ class App(tk.Tk):
         self.run_btn = ttk.Button(fi, text="Stop", style="Run.TButton", command=self._toggle_run)
         self.run_btn.pack(side="right")
         ttk.Button(fi, text="Open txt", command=self._open_txt).pack(side="right", padx=(0, 8))
+        ttk.Button(fi, text="Show log", command=self._open_log).pack(side="right", padx=(0, 8))
 
         main = tk.Frame(self, bg=BG)
         main.pack(fill="both", expand=True)
@@ -1002,6 +1035,16 @@ class App(tk.Tk):
             return
         if not os.path.exists(path):
             write_atomic(path, self.current_text)
+        self._open_file(path)
+
+    def _open_log(self):
+        if not os.path.exists(LOG_FILE):
+            messagebox.showinfo(APP_NAME, "No log yet — it starts filling once the tracker runs.",
+                                parent=self)
+            return
+        self._open_file(LOG_FILE)
+
+    def _open_file(self, path):
         try:
             os.startfile(path)  # Windows
         except AttributeError:
@@ -1097,6 +1140,12 @@ class App(tk.Tk):
         t.configure(state="disabled")
         if at_bottom:
             t.see("end")
+        # also keep it on disk, so gaps and errors can be checked later
+        try:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d')} {ts}  {msg}\n")
+        except Exception:
+            pass
 
     def _pump(self):
         try:
@@ -1168,6 +1217,47 @@ def already_running():
         return True
 
 
+def trim_log_file():
+    """Keeps activity_log.txt from growing forever: drops the oldest half."""
+    try:
+        if os.path.getsize(LOG_FILE) > LOG_FILE_MAX:
+            with open(LOG_FILE, "rb") as f:
+                f.seek(-LOG_FILE_MAX // 2, os.SEEK_END)
+                tail = f.read()
+            tail = tail[tail.find(b"\n") + 1:]  # start on a whole line
+            with open(LOG_FILE, "wb") as f:
+                f.write(tail)
+    except OSError:
+        pass
+
+
+def disable_power_throttling():
+    """Asks Windows not to slow this app down while it's in the background
+    (EcoQoS / power throttling), so refreshes keep coming on time."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _Throttling(ctypes.Structure):
+            _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG),
+                        ("StateMask", wintypes.ULONG)]
+
+        EXECUTION_SPEED, IGNORE_TIMER_RESOLUTION = 0x1, 0x4
+        ProcessPowerThrottling = 4
+        # control these two, state off = never throttle
+        info = _Throttling(1, EXECUTION_SPEED | IGNORE_TIMER_RESOLUTION, 0)
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int,
+                                              ctypes.c_void_p, wintypes.DWORD]
+        k32.SetProcessInformation(k32.GetCurrentProcess(), ProcessPowerThrottling,
+                                  ctypes.byref(info), ctypes.sizeof(info))
+    except Exception:
+        pass  # older Windows: nothing to turn off
+
+
 def focus_existing_window():
     """Brings the already-open window to the front."""
     if os.name != "nt":
@@ -1191,4 +1281,6 @@ if __name__ == "__main__":
             messagebox.showinfo(APP_NAME, f"{APP_NAME} is already open.")
             r.destroy()
         sys.exit(0)
+    disable_power_throttling()
+    trim_log_file()
     App().mainloop()
