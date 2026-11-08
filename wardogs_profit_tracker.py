@@ -1,8 +1,9 @@
 """
 Wardogs Profit Tracker
-Reads your Steam rich presence (via a signed-in browser), pulls out the
-money amount, writes it to a txt file for OBS, and can recolor the OBS
-text source for profit / loss through OBS WebSocket.
+Reads your own Steam status live from the Steam friends page (in a hidden,
+signed-in browser), pulls out the money amount, writes it to a txt file for
+OBS, and can recolor the OBS text source for profit / loss through OBS
+WebSocket.
 """
 import json
 import os
@@ -14,7 +15,6 @@ import sys
 import threading
 import time
 import tkinter as tk
-from html.parser import HTMLParser
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 APP_NAME = "Wardogs Profit Tracker"
@@ -31,11 +31,16 @@ LOG_FILE = os.path.join(HERE, "activity_log.txt")
 LOG_FILE_MAX = 1_000_000  # bytes; trimmed to the newest half at startup
 LOGIN_URL = "https://steamcommunity.com/login/home/"
 
-MIN_INTERVAL = 10  # seconds - fastest allowed refresh
+# The Steam friends page gets your own status pushed live, within seconds
+CHAT_URL = "https://steamcommunity.com/chat"
+CHAT_POLL = 2          # seconds between reads of the (already open) page
+CHAT_TIMEOUT = 10      # seconds before a read counts as failed
+CHAT_RETRY = 60        # after the page fails to restart, try again this much later
+MIN_RELOAD_MINUTES = 5  # the optional page refresh is never more often than this
 
 DEFAULTS = {
-    "url": "",
-    "interval": 15,
+    "reload_on": False,   # refresh the friends page now and then (off: risk of rate limits)
+    "reload_minutes": 30,
     "space": True,
     "out_file": "",
     "keep_last": True,
@@ -151,62 +156,7 @@ def save_settings(s):
         pass
 
 
-# ---------------- page parsing ----------------
-VOID = {"img", "br", "hr", "input", "meta", "link", "source", "wbr", "area", "col"}
-
-
-class MiniProfileParser(HTMLParser):
-    WANT = {
-        "persona": "name",
-        "miniprofile_game_name": "game",
-        "rich_presence": "presence",
-        "game_state": "state",
-    }
-
-    def __init__(self):
-        super().__init__()
-        self.data = {}
-        self.status = ""
-        self.stack = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in VOID:
-            return
-        classes = (dict(attrs).get("class") or "").split()
-        key = None
-        for c in classes:
-            if c in self.WANT:
-                key = self.WANT[c]
-        if "persona" in classes:
-            for st in ("in-game", "online", "offline", "away", "snooze", "busy"):
-                if st in classes:
-                    self.status = st
-        self.stack.append(key)
-
-    def handle_startendtag(self, tag, attrs):
-        pass
-
-    def handle_endtag(self, tag):
-        if tag in VOID:
-            return
-        if self.stack:
-            self.stack.pop()
-
-    def handle_data(self, text):
-        for key in reversed(self.stack):
-            if key:
-                self.data[key] = self.data.get(key, "") + text
-                break
-
-
-def parse_presence(html):
-    p = MiniProfileParser()
-    p.feed(html)
-    d = {k: " ".join(v.split()) for k, v in p.data.items()}
-    if d.get("presence"):
-        return d["presence"]
-    return (d.get("state") or p.status or "Offline").title()
-
+# ---------------- money ----------------
 
 # sign only counts when it touches the $ (so "Range - $3,740" isn't read as minus)
 MONEY = re.compile(r"([+\-−]?)\$\s?(\d[\d,]*(?:\.\d+)?)")
@@ -320,72 +270,8 @@ def launch_browser(pw, headless, log=None):
     raise RuntimeError(f"Couldn't start a browser: {last_err}")
 
 
-STEAMID64_BASE = 76561197960265728  # SteamID64 = this + account ID
-
-
-STEAMDB_URL = "https://steamdb.info/calculator/"
-
-
-def to_miniprofile_url(text):
-    """Accepts anything SteamDB shows you and turns it into a miniprofile link:
-    a miniprofile link, a SteamID64 (7656...), a /profiles/7656... link,
-    a Steam3 ID like [U:1:12345678], or a plain account ID."""
-    t = (text or "").strip()
-    if not t:
-        return t
-    if "miniprofile/" in t:
-        return t if re.match(r"https?://", t, re.IGNORECASE) else "https://" + t
-    m = re.search(r"\[?U:1:(\d+)\]?", t, re.IGNORECASE)
-    if m:
-        return f"https://steamcommunity.com/miniprofile/{int(m.group(1))}"
-    m = re.search(r"(7656\d{13})", t)
-    if m:
-        return f"https://steamcommunity.com/miniprofile/{int(m.group(1)) - STEAMID64_BASE}"
-    if re.fullmatch(r"\d{1,10}", t):
-        return f"https://steamcommunity.com/miniprofile/{int(t)}"
-    return t  # something else (e.g. a /id/name/ link) - leave it as typed
-
-
-def miniprofile_url_from_cookies(ctx):
-    """Builds https://steamcommunity.com/miniprofile/<account id> for the
-    signed-in account. The steamLoginSecure cookie starts with your SteamID64."""
-    from urllib.parse import unquote
-    for c in ctx.cookies("https://steamcommunity.com"):
-        if c["name"] == "steamLoginSecure":
-            m = re.match(r"(\d{17})", unquote(c["value"]))
-            if m:
-                account_id = int(m.group(1)) - STEAMID64_BASE
-                if account_id > 0:
-                    return f"https://steamcommunity.com/miniprofile/{account_id}", m.group(1)
-    return None, None
-
-
 def signed_in(ctx):
     return any(c["name"] == "steamLoginSecure" for c in ctx.cookies("https://steamcommunity.com"))
-
-
-def cookie_jar_from_context(ctx):
-    """Copies the browser's Steam cookies into a plain Python cookie jar, so
-    refreshes don't need the browser (a throttled background browser can
-    stall without ever timing out)."""
-    from http.cookiejar import Cookie, CookieJar
-    jar = CookieJar()
-    for c in ctx.cookies():
-        if "steam" not in c["domain"]:
-            continue
-        session = c.get("expires", -1) < 0
-        jar.set_cookie(Cookie(
-            0, c["name"], c["value"], None, False,
-            c["domain"], True, c["domain"].startswith("."),
-            c.get("path", "/"), True, c.get("secure", False),
-            None if session else int(c["expires"]), session,
-            None, None, {"HttpOnly": None} if c.get("httpOnly") else {}))
-    return jar
-
-
-def jar_signed_in(jar):
-    jar.clear_expired_cookies()
-    return any(c.name == "steamLoginSecure" for c in jar)
 
 
 class Worker(threading.Thread):
@@ -396,6 +282,8 @@ class Worker(threading.Thread):
         self.force_login = False
         self.ctx = None  # open browser context, closed in cleanup()
         self.obs = None  # open OBS connection, closed in close_obs()
+        self.page = None  # the live friends page, while it's working
+        self.page_opened = 0
 
     def log(self, msg, color=None):
         self.app.events.put(("log", time.strftime("%H:%M:%S"), msg, color))
@@ -449,14 +337,12 @@ class Worker(threading.Thread):
             self.emit("stopped", self)
             return
         try:
-            # the browser is only needed to sign in and read the cookies
             with sync_playwright() as pw:
                 try:
-                    jar = self.sign_in(pw)
+                    if self.sign_in(pw):
+                        self.loop(pw)
                 finally:
                     self.close_ctx()
-            if jar is not None:
-                self.loop(jar)
         except Exception as e:
             self.log(f"Stopped: {e}", "#FF8A7A")
         finally:
@@ -464,77 +350,119 @@ class Worker(threading.Thread):
         self.emit("stopped", self)
 
     def sign_in(self, pw):
-        """Returns a cookie jar for the signed-in Steam account, or None."""
-        ctx = self.ctx = launch_browser(pw, headless=True, log=self.log)
-        need_login = self.force_login or not signed_in(ctx)
-        if need_login:
+        """Leaves a headless, signed-in browser open in self.ctx; False if
+        signing in didn't happen."""
+        self.ctx = launch_browser(pw, headless=True, log=self.log)
+        if self.force_login or not signed_in(self.ctx):
             self.close_ctx()
             if self.force_login:
                 shutil.rmtree(PROFILE_DIR, ignore_errors=True)
             if not self.login(pw):
-                return None
-            ctx = self.ctx = launch_browser(pw, headless=True)
-        my_url, sid64 = miniprofile_url_from_cookies(ctx)
-        if my_url:
-            self.log(f"Signed-in account: SteamID64 {sid64} → {my_url}")
-            self.emit("account", my_url)
-        return cookie_jar_from_context(ctx)
+                return False
+            self.ctx = launch_browser(pw, headless=True)
+        return True
 
-    def loop(self, jar):
-        import urllib.request
-        # plain HTTP with the Steam cookies: no browser, hard 20 s timeout
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-        headers = {"Cache-Control": "no-cache", "Pragma": "no-cache",
-                   "Referer": "https://steamcommunity.com/",
-                   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                                 "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"}
+    # ---- live friends page ----
+    def open_chat(self, pw):
+        """Opens the Steam friends page once. It keeps a live connection to
+        Steam, so your status updates arrive within seconds, no reloading."""
+        if self.ctx is None:
+            self.ctx = launch_browser(pw, headless=True)
+        page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        page.goto(CHAT_URL, wait_until="domcontentloaded", timeout=30000)
+        page.locator(".currentUserContainer").wait_for(timeout=30000)
+        page.wait_for_timeout(2000)  # the status line fills in just after
+        self.page, self.page_opened = page, time.time()
+
+    def read_chat(self):
+        """Your own status line on the friends page, e.g. 'WARDOGS -$6,575 Loss'.
+        Playwright's timeout stops a frozen browser from stalling us."""
+        text = self.page.locator(".currentUserContainer").inner_text(timeout=CHAT_TIMEOUT * 1000)
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        return " ".join(lines[1:])  # first line is your name
+
+    def restart_chat(self, pw):
+        self.page = None
+        self.close_ctx()
+        self.open_chat(pw)
+
+    def loop(self, pw):
+        self.page = None
+        chat_fails = 0
+        chat_retry_at = 0      # while the friends page is down, when to try it again
         obs_conn = None        # (host, port, password) the OBS connection was made with
         obs_color_sent = None  # (source, color) last sent to OBS
         obs_warned = False
         last_text = ""
+        last_raw = written = None
+        last_logged = 0
         fails = 0
-        url_warned = None
+        file_warned = False
         signed_out_warned = False
         self.log("Started.")
         while not self.stop_event.is_set():
             cfg = dict(self.app.cfg)  # live settings
-            missing = None
-            if not cfg["url"]:
-                missing = "Steam miniprofile URL"
-            elif not cfg["out_file"]:
-                missing = "output text file"
-            if missing:
-                self.emit("status", f"Enter your {missing}", "#FACC15")
-                if url_warned != missing:
-                    self.log(f"Waiting — set your {missing} above.", "#FACC15")
-                    url_warned = missing
+            if not cfg["out_file"]:
+                self.emit("status", "Choose your output text file", "#FACC15")
+                if not file_warned:
+                    self.log("Waiting — choose your output text file above.", "#FACC15")
+                    file_warned = True
                 self.sleep(2)
                 continue
-            url_warned = None
+            file_warned = False
+            if self.page is None:
+                if time.time() < chat_retry_at:
+                    self.sleep(1)
+                    continue
+                try:
+                    self.restart_chat(pw)
+                    chat_fails = 0
+                    self.log("Reading the live Steam friends page.", "#5FE39B")
+                except Exception as e:
+                    chat_retry_at = time.time() + CHAT_RETRY
+                    self.log(f"Friends page didn't open ({e}) — retrying in {CHAT_RETRY} s.",
+                             "#FF8A7A")
+                    self.emit("status", "Friends page down — retrying", "#FF8A7A")
+                    continue
             try:
-                url = cfg["url"]
-                if not re.match(r"https?://", url, re.IGNORECASE):
-                    url = "https://" + url
-                url += f"{'&' if '?' in url else '?'}_={int(time.time() * 1000)}"
-                # HTTP errors (4xx/5xx) raise and are retried below
-                with opener.open(urllib.request.Request(url, headers=headers), timeout=20) as resp:
-                    html = resp.read().decode("utf-8", errors="replace")
-                    landed_on_login = "/login" in resp.geturl()
-                raw = parse_presence(html)
+                try:
+                    reload_every = max(MIN_RELOAD_MINUTES, int(cfg["reload_minutes"])) * 60
+                    if cfg["reload_on"] and time.time() - self.page_opened > reload_every:
+                        # optional fresh page, in case its connection went stale
+                        self.page.reload(wait_until="domcontentloaded", timeout=30000)
+                        self.page.locator(".currentUserContainer").wait_for(timeout=30000)
+                        self.page.wait_for_timeout(2000)
+                        self.page_opened = time.time()
+                    raw = self.read_chat()
+                    landed_on_login = "/login" in self.page.url
+                    chat_fails = 0
+                except Exception:
+                    chat_fails += 1
+                    if chat_fails >= 3:
+                        # watchdog: 3 failed reads in a row, so start the browser fresh
+                        chat_fails = 0
+                        self.page = None
+                        self.log("Friends page stopped answering — restarting it.", "#FACC15")
+                    raise
                 text = extract_money(raw, cfg["space"])
                 kept = False
                 if not text and cfg["keep_last"] and last_text:
                     # reuse the last amount, with the current space setting
                     sign, body = last_text[0], last_text[1:].lstrip()
                     text, kept = sign + (" " if cfg["space"] else "") + body, True
-                write_atomic(cfg["out_file"], text)
+                if (cfg["out_file"], text) != written:
+                    write_atomic(cfg["out_file"], text)
+                    written = (cfg["out_file"], text)
                 if text:
                     last_text = text
                 fails = 0
                 self.emit("value", text, raw, kept)
-                note = "(kept last)" if kept else (text or "(blank)")
-                self.log(f'refreshed  "{raw}" → {note}',
-                         self.app.color_for(text) if text and not kept else None)
+                # log changes (and a heartbeat every 5 min), not every 2 s read
+                if raw != last_raw or time.time() - last_logged > 300:
+                    note = "(kept last)" if kept else (text or "(blank)")
+                    self.log(f'live  "{raw}" → {note}',
+                             self.app.color_for(text) if text and not kept and raw != last_raw else None)
+                    last_raw, last_logged = raw, time.time()
 
                 # OBS color
                 if cfg["obs_on"] and text:
@@ -563,7 +491,7 @@ class Worker(threading.Thread):
 
                 # Steam drops the sign-in cookie (or redirects to login) when the
                 # session ends; signed-out pages can show stale text
-                if landed_on_login or not jar_signed_in(jar):
+                if landed_on_login:
                     if not signed_out_warned:
                         self.log("Signed out of Steam — the amount may be stale. "
                                  "Click \"Sign in again\".", "#FACC15")
@@ -571,14 +499,12 @@ class Worker(threading.Thread):
                     self.emit("status", "Signed out — click Sign in again", "#FACC15")
                 else:
                     signed_out_warned = False
-                    self.emit("status", "Signed in · refreshed just now", "#3DDC84")
+                    self.emit("status", "Signed in · live", "#3DDC84")
             except Exception as e:
                 fails += 1
                 self.log(f"error (attempt {fails}): {e}", "#FF8A7A")
                 self.emit("status", "Error — retrying", "#FF8A7A")
-            interval = max(MIN_INTERVAL, int(cfg["interval"]))
-            # back off on errors (up to 60 s), but never retry faster than normal
-            delay = interval if fails == 0 else min(max(60, interval), interval * 2 ** (fails - 1))
+            delay = CHAT_POLL if fails == 0 else 5
             self.sleep(delay)
         self.log("Stopped.")
 
@@ -638,7 +564,6 @@ class App(tk.Tk):
         self.worker = None
         self.last_refresh = None
         self.current_text = ""
-        self.my_url = None
         self._style()
         self._build()
         self._load_into_widgets()
@@ -786,64 +711,34 @@ class App(tk.Tk):
         form.columnconfigure(0, weight=1)
         form.columnconfigure(1, weight=1)
 
-        self._label(form, "Steam miniprofile URL (filled in from your Steam sign-in)").grid(row=0, column=0, columnspan=2, sticky="w")
-        self.url_var = tk.StringVar()
-        ucol = tk.Frame(form, bg=BG)
-        ucol.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 10))
-        uf = tk.Frame(ucol, bg=BG)
-        uf.pack(fill="x")
-        url_entry = ttk.Entry(uf, textvariable=self.url_var)
-        url_entry.pack(side="left", fill="x", expand=True)
-        # turn a pasted SteamID64 / [U:1:…] / account ID into a miniprofile link
-        # gray "Add Steam ID" hint shown while the box is empty
-        ph = tk.Label(url_entry, text="Add Steam ID", bg=BG_DARK, fg="#6F7887",
-                      font=("Segoe UI", 10), cursor="xterm")
-        ph.bind("<Button-1>", lambda e: url_entry.focus_set())
+        self._label(form, "Output text file (for OBS)").grid(row=0, column=0, columnspan=2, sticky="w")
+        of = tk.Frame(form, bg=BG)
+        of.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 10))
+        self.out_var = tk.StringVar()
+        ttk.Entry(of, textvariable=self.out_var).pack(side="left", fill="x", expand=True)
+        ttk.Button(of, text="Browse…", command=self._browse).pack(side="left", padx=(8, 0))
 
-        def update_placeholder(*_):
-            try:
-                focused = self.focus_get() is url_entry
-            except (KeyError, tk.TclError):
-                focused = False
-            if self.url_var.get().strip() or focused:
-                ph.place_forget()
-            else:
-                ph.place(x=8, rely=0.5, anchor="w")
-        self.url_var.trace_add("write", update_placeholder)
-        url_entry.bind("<FocusIn>", update_placeholder, add="+")
-        url_entry.bind("<FocusOut>", lambda e: (self._normalize_url(), update_placeholder()))
-        self.after(100, update_placeholder)
-        url_entry.bind("<Return>", lambda e: self._normalize_url())
-        url_entry.bind("<<Paste>>", lambda e: self.after(50, self._normalize_url))
-        self.my_acct_btn = ttk.Button(uf, text="Use my account", command=self._use_my_account,
-                                      state="disabled")
-        self.my_acct_btn.pack(side="left", padx=(8, 0))
-        hint = tk.Frame(ucol, bg=BG)
-        hint.pack(fill="x", pady=(4, 0))
-        tk.Label(hint, text="Find Steam ID:", bg=BG, fg="#8A93A3",
-                 font=("Segoe UI", 8)).pack(side="left")
-        link = tk.Label(hint, text="SteamDB ↗", bg=BG, fg="#7FB4FF",
-                        font=("Segoe UI", 8, "underline"), cursor="hand2")
-        link.pack(side="left", padx=(4, 0))
-        link.bind("<Button-1>", lambda e: __import__("webbrowser").open(STEAMDB_URL))
-
-        self._label(form, "Refresh every (seconds)").grid(row=2, column=0, sticky="w")
-        self._label(form, "Space after sign").grid(row=2, column=1, sticky="w", padx=(12, 0))
-        self.interval_var = tk.IntVar()
-        ttk.Spinbox(form, from_=MIN_INTERVAL, to=300, increment=5, textvariable=self.interval_var,
-                    width=8).grid(row=3, column=0, sticky="ew", pady=(4, 10))
+        self._label(form, "Space after sign").grid(row=2, column=0, columnspan=2, sticky="w")
         sp = tk.Frame(form, bg=BG)
-        sp.grid(row=3, column=1, sticky="w", padx=(12, 0), pady=(4, 10))
+        sp.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 10))
         self.space_var = tk.BooleanVar()
         ttk.Radiobutton(sp, text="+ $3,740", value=True, variable=self.space_var).pack(side="left")
         ttk.Radiobutton(sp, text="+$3,740", value=False, variable=self.space_var).pack(side="left", padx=(10, 0))
 
-        self._label(form, "Output text file (for OBS)").grid(row=4, column=0, columnspan=2, sticky="w")
-        of = tk.Frame(form, bg=BG)
-        of.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 10))
-        self.out_var = tk.StringVar()
-        ttk.Entry(of, textvariable=self.out_var).pack(side="left", fill="x", expand=True)
-        ttk.Button(of, text="Browse…", command=self._browse).pack(side="left", padx=(8, 0))
+        rl = tk.Frame(form, bg=BG)
+        rl.grid(row=4, column=0, columnspan=2, sticky="w")
+        self.reload_on_var = tk.BooleanVar()
+        ttk.Checkbutton(rl, text="Refresh the Steam friends page every",
+                        variable=self.reload_on_var).pack(side="left")
+        self.reload_min_var = tk.IntVar()
+        ttk.Spinbox(rl, from_=MIN_RELOAD_MINUTES, to=240, increment=5, width=5,
+                    textvariable=self.reload_min_var).pack(side="left", padx=(6, 6))
+        self._label(rl, "minutes").pack(side="left")
+        warn = self._label(form, "Off by default. The page updates live without refreshing — be "
+                                 "careful: refreshing often can get you rate limited by Steam. Only "
+                                 "turn this on if the number stops updating.", fg="#E0A458", size=8)
+        warn.configure(wraplength=480, justify="left")
+        warn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 10))
 
         # colors
         cr = tk.Frame(form, bg=BG)
@@ -905,7 +800,7 @@ class App(tk.Tk):
 
 
         # any setting change -> save + apply live
-        for v in (self.url_var, self.interval_var, self.space_var, self.out_var, self.color_on_var,
+        for v in (self.space_var, self.reload_on_var, self.reload_min_var, self.out_var, self.color_on_var,
                   self.keep_var, self.obs_on_var, self.obs_source_var, self.obs_host_var,
                   self.obs_port_var, self.obs_pass_var):
             v.trace_add("write", lambda *_: self._sync_cfg())
@@ -928,9 +823,9 @@ class App(tk.Tk):
     def _load_into_widgets(self):
         self._loading = True
         c = dict(self.cfg)
-        self.url_var.set(c["url"])
-        self.interval_var.set(int(c["interval"]))
         self.space_var.set(bool(c["space"]))
+        self.reload_on_var.set(bool(c["reload_on"]))
+        self.reload_min_var.set(int(c["reload_minutes"]))
         self.out_var.set(c["out_file"])
         self.color_on_var.set(bool(c["color_on"]))
         self.keep_var.set(bool(c["keep_last"]))
@@ -948,14 +843,14 @@ class App(tk.Tk):
             return
         c = self.cfg
         try:
-            c["interval"] = max(MIN_INTERVAL, int(self.interval_var.get()))
-        except (tk.TclError, ValueError):
-            pass
-        try:
             c["obs_port"] = int(self.obs_port_var.get())
         except ValueError:
             pass
-        c["url"] = self.url_var.get().strip()
+        try:
+            c["reload_minutes"] = max(MIN_RELOAD_MINUTES, int(self.reload_min_var.get()))
+        except (tk.TclError, ValueError):
+            pass
+        c["reload_on"] = bool(self.reload_on_var.get())
         space_changed = c["space"] != bool(self.space_var.get())
         c["space"] = bool(self.space_var.get())
         if space_changed and self.current_text and c["out_file"]:
@@ -993,16 +888,6 @@ class App(tk.Tk):
             save_settings(self.cfg)
             self._paint_color_buttons()
             self._show_value(self.current_text)
-
-    def _normalize_url(self):
-        cur = self.url_var.get()
-        new = to_miniprofile_url(cur)
-        if new != cur.strip():
-            self.url_var.set(new)
-
-    def _use_my_account(self):
-        if self.my_url:
-            self.url_var.set(self.my_url)
 
     def _toggle_pass(self):
         hidden = self.pass_entry.cget("show") == "•"
@@ -1165,11 +1050,6 @@ class App(tk.Tk):
                     self.status_dot.configure(fg=ev[2])
                 elif kind == "obs":
                     self._set_obs_pill(ev[1])
-                elif kind == "account":
-                    self.my_url = ev[1]
-                    self.my_acct_btn.configure(state="normal")
-                    if not self.url_var.get().strip():
-                        self.url_var.set(self.my_url)  # fill it in automatically
                 elif kind == "stopped":
                     if ev[1] is not self.worker:
                         continue  # an older run finishing after a new one started

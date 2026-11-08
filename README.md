@@ -1,19 +1,54 @@
-# Wardogs-Game-Profit-Tracker
+# Wardogs Game Profit Tracker
 
-A Vibe Coded Python program to track your current game profits or loss
+A vibe coded Python program to track your current game profit or loss in WARDOGS
+and show it on stream.
 
-This Uses steam mini profile to grab the profit with a web browser it will use your default if its chrome based if not it will use edge
-it also allows you to connect to obs and change the color of text based on if you are in profit or loss
-downsides you need to login to steam for to not get limited but due to this it auto grabs the mini profile link and can view the number even if your profile is private
-this is 100% vibe coded i probably cant support this long term if some wants to take this over thats ok with me
-# Wardogs Profit Tracker
+It reads your status from the Steam friends page with a web browser (your default
+browser if it's Chrome-based, otherwise Edge), pulls out the money amount
+(`+ $3,740` / `- $3,740`) and writes it to a text file that an OBS Text source can
+show. It can also connect to OBS and change the text color depending on whether
+you're in profit or loss.
 
-A small Windows app for streamers playing WARDOGS. It reads your Steam rich
-presence, pulls out the money amount (`+ $3,740` / `- $3,740`), and writes it to
-a text file that an OBS Text source can show. It can also recolor that OBS text
-for profit / loss through OBS WebSocket.
+You need to sign in to Steam once, so it can read your own status. That also means
+it works even if your profile is private.
 
-## Build
+This is 100% vibe coded. I probably can't support it long term — if someone wants
+to take it over, that's OK with me.
+
+## Download
+
+Grab `Wardogs.Profit.Tracker.exe` from the
+[latest release](../../releases/latest), put it in any folder and run it.
+Settings and your Steam sign-in are saved next to the exe.
+
+Windows may show a SmartScreen warning because the exe isn't signed: click
+**More info → Run anyway**.
+
+## Use
+
+1. Start the exe. The first time, a browser opens: sign in to Steam there.
+2. Pick an output text file (**Browse…**) and point an OBS Text source at it
+   (**Read from file**).
+3. Play. New amounts show up within a few seconds of Steam sending them.
+4. Optional: turn on **OBS color**, enter your OBS WebSocket details
+   (OBS › Tools › WebSocket Server Settings › Show Connect Info) and press **Test**.
+
+## Settings
+
+- **Space after sign** — `+ $3,740` or `+$3,740`.
+- **Refresh the Steam friends page** — off by default. The page updates live on
+  its own; refreshing it often can get you rate limited by Steam, so only turn it
+  on if the number stops updating.
+- **Text color** — profit / loss colors, used in the app and for OBS color.
+- **Keep last amount** — keeps showing the last amount in menus instead of going blank.
+
+**Show log** opens `activity_log.txt` (next to the exe), which records every change
+with a time stamp — handy if something looks stuck.
+
+The OBS password is stored encrypted with your Windows account (DPAPI); it can't be
+read on another PC.
+
+## Build it yourself
 
 Needs Python 3 on Windows. Run:
 
@@ -22,20 +57,9 @@ build_exe.bat
 ```
 
 It installs the dependencies (playwright, obsws-python, pyinstaller) and builds
-`dist\Wardogs Profit Tracker.exe`. Move the exe anywhere you like; it keeps its
-settings and Steam sign-in next to itself.
-
-## Use
-
-1. Start the exe. The first time, a browser opens: sign in to Steam there.
-2. Your miniprofile URL is filled in from your account (or paste a Steam ID).
-3. Pick an output text file and point an OBS Text source at it ("Read from file").
-4. Optional: turn on **OBS color**, enter your OBS WebSocket details
-   (OBS › Tools › WebSocket Server Settings) and press **Test**.
-
-Uses your default browser if it's Chromium-based (Chrome, Edge, Brave...),
-otherwise Edge or Chrome. The OBS password is stored encrypted with Windows DPAPI.
+`dist\Wardogs Profit Tracker.exe`.
 
 ## Remove
 
-- `uninstall.bat` - removes the exe, settings, sign-in and optionally the build tools.
+Run `uninstall.bat`. It removes the exe, settings, Steam sign-in and log, and
+optionally the build tools.
