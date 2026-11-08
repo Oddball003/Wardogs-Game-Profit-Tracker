@@ -42,6 +42,8 @@ DEFAULTS = {
     "reload_on": False,   # refresh the friends page now and then (off: risk of rate limits)
     "reload_minutes": 30,
     "space": True,
+    "prefix": "",         # text before the amount, e.g. "Profit: "
+    "suffix": "",         # text after the amount, e.g. " this game"
     "out_file": "",
     "keep_last": True,
     "color_on": True,
@@ -177,6 +179,13 @@ def extract_money(text, space=True):
     else:
         sign = "+"
     return f"{sign}{' ' if space else ''}${number}"
+
+
+def decorate(text, cfg):
+    """Add the before/after text around an amount. Blank stays blank."""
+    if not text:
+        return ""
+    return f"{cfg.get('prefix', '')}{text}{cfg.get('suffix', '')}"
 
 
 _write_lock = threading.Lock()  # the worker and the window both write the txt
@@ -450,9 +459,10 @@ class Worker(threading.Thread):
                     # reuse the last amount, with the current space setting
                     sign, body = last_text[0], last_text[1:].lstrip()
                     text, kept = sign + (" " if cfg["space"] else "") + body, True
-                if (cfg["out_file"], text) != written:
-                    write_atomic(cfg["out_file"], text)
-                    written = (cfg["out_file"], text)
+                shown = decorate(text, cfg)
+                if (cfg["out_file"], shown) != written:
+                    write_atomic(cfg["out_file"], shown)
+                    written = (cfg["out_file"], shown)
                 if text:
                     last_text = text
                 fails = 0
@@ -649,6 +659,9 @@ class App(tk.Tk):
         self.money_lbl = tk.Label(live, text="—", bg=BG_DARK, fg=TEXT,
                                   font=("Consolas", 40, "bold"), anchor="w")
         self.money_lbl.pack(fill="x", padx=14, pady=(6, 0))
+        # the full line OBS gets, when there's text before/after the amount
+        self.obs_line_lbl = tk.Label(live, text="", bg=BG_DARK, fg=TEXT, font=("Segoe UI", 10),
+                                     anchor="w", justify="left", wraplength=340)
         self.raw_lbl = tk.Label(live, text='Steam says: ""', bg=BG_DARK, fg=MUTED,
                                 font=("Consolas", 9), anchor="w", justify="left", wraplength=340)
         self.raw_lbl.pack(fill="x", padx=16, pady=(2, 12))
@@ -725,8 +738,19 @@ class App(tk.Tk):
         ttk.Radiobutton(sp, text="+ $3,740", value=True, variable=self.space_var).pack(side="left")
         ttk.Radiobutton(sp, text="+$3,740", value=False, variable=self.space_var).pack(side="left", padx=(10, 0))
 
+        # text before / after the amount
+        self._label(form, "Text before amount").grid(row=4, column=0, sticky="w")
+        self._label(form, "Text after amount").grid(row=4, column=1, sticky="w", padx=(12, 0))
+        self.prefix_var = tk.StringVar()
+        self.suffix_var = tk.StringVar()
+        ttk.Entry(form, textvariable=self.prefix_var).grid(row=5, column=0, sticky="ew", pady=(4, 2))
+        ttk.Entry(form, textvariable=self.suffix_var).grid(row=5, column=1, sticky="ew",
+                                                            padx=(12, 0), pady=(4, 2))
+        self._label(form, 'Optional, e.g. "Profit: " — spaces count. Leave empty for just the amount.',
+                    fg="#8A93A3", size=8).grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
         rl = tk.Frame(form, bg=BG)
-        rl.grid(row=4, column=0, columnspan=2, sticky="w")
+        rl.grid(row=7, column=0, columnspan=2, sticky="w")
         self.reload_on_var = tk.BooleanVar()
         ttk.Checkbutton(rl, text="Refresh the Steam friends page every",
                         variable=self.reload_on_var).pack(side="left")
@@ -738,16 +762,16 @@ class App(tk.Tk):
                                  "careful: refreshing often can get you rate limited by Steam. Only "
                                  "turn this on if the number stops updating.", fg="#E0A458", size=8)
         warn.configure(wraplength=480, justify="left")
-        warn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 10))
+        warn.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(2, 10))
 
         # colors
         cr = tk.Frame(form, bg=BG)
-        cr.grid(row=6, column=0, columnspan=2, sticky="ew")
+        cr.grid(row=9, column=0, columnspan=2, sticky="ew")
         self._label(cr, "Text color").pack(side="left")
         self.color_on_var = tk.BooleanVar()
         ttk.Checkbutton(cr, text="Color by + / −", variable=self.color_on_var).pack(side="right")
         cc = tk.Frame(form, bg=BG)
-        cc.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 10))
+        cc.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(4, 10))
         cc.columnconfigure(0, weight=1)
         cc.columnconfigure(1, weight=1)
         self.profit_btn = self._color_button(cc, "+ Profit", "profit_color")
@@ -773,17 +797,23 @@ class App(tk.Tk):
         sw_lbl.pack(side="right", padx=(0, 8))
         sw_lbl.bind("<Button-1>", lambda e: self.obs_on_var.set(not self.obs_on_var.get()))
 
-        self._label(inner, "Text source name", CARD).grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        # connection fields, only shown while OBS color is on
+        fields = tk.Frame(inner, bg=CARD)
+        fields.grid(row=1, column=0, columnspan=2, sticky="ew")
+        fields.columnconfigure(0, weight=2)
+        fields.columnconfigure(1, weight=1)
+        self.obs_fields = fields
+        self._label(fields, "Text source name", CARD).grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
         self.obs_source_var = tk.StringVar()
-        ttk.Entry(inner, textvariable=self.obs_source_var).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 8))
-        self._label(inner, "Host", CARD).grid(row=3, column=0, sticky="w")
-        self._label(inner, "Port", CARD).grid(row=3, column=1, sticky="w", padx=(12, 0))
+        ttk.Entry(fields, textvariable=self.obs_source_var).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 8))
+        self._label(fields, "Host", CARD).grid(row=3, column=0, sticky="w")
+        self._label(fields, "Port", CARD).grid(row=3, column=1, sticky="w", padx=(12, 0))
         self.obs_host_var = tk.StringVar()
         self.obs_port_var = tk.StringVar()
-        ttk.Entry(inner, textvariable=self.obs_host_var).grid(row=4, column=0, sticky="ew", pady=(4, 8))
-        ttk.Entry(inner, textvariable=self.obs_port_var).grid(row=4, column=1, sticky="ew", padx=(12, 0), pady=(4, 8))
-        self._label(inner, "Password", CARD).grid(row=5, column=0, columnspan=2, sticky="w")
-        pw = tk.Frame(inner, bg=CARD)
+        ttk.Entry(fields, textvariable=self.obs_host_var).grid(row=4, column=0, sticky="ew", pady=(4, 8))
+        ttk.Entry(fields, textvariable=self.obs_port_var).grid(row=4, column=1, sticky="ew", padx=(12, 0), pady=(4, 8))
+        self._label(fields, "Password", CARD).grid(row=5, column=0, columnspan=2, sticky="w")
+        pw = tk.Frame(fields, bg=CARD)
         pw.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 2))
         self.obs_pass_var = tk.StringVar()
         self.pass_entry = ttk.Entry(pw, textvariable=self.obs_pass_var, show="•")
@@ -791,7 +821,7 @@ class App(tk.Tk):
         self.show_pass_btn = ttk.Button(pw, text="Show", width=6, command=self._toggle_pass)
         self.show_pass_btn.pack(side="left", padx=(8, 0))
         ttk.Button(pw, text="Test", command=self._test_obs).pack(side="left", padx=(8, 0))
-        self._label(inner, "In OBS: Tools › WebSocket Server Settings › Show Connect Info",
+        self._label(fields, "In OBS: Tools › WebSocket Server Settings › Show Connect Info",
                     CARD, "#8A93A3", 8).grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self.keep_var = tk.BooleanVar()
@@ -800,7 +830,7 @@ class App(tk.Tk):
 
 
         # any setting change -> save + apply live
-        for v in (self.space_var, self.reload_on_var, self.reload_min_var, self.out_var, self.color_on_var,
+        for v in (self.space_var, self.prefix_var, self.suffix_var, self.reload_on_var, self.reload_min_var, self.out_var, self.color_on_var,
                   self.keep_var, self.obs_on_var, self.obs_source_var, self.obs_host_var,
                   self.obs_port_var, self.obs_pass_var):
             v.trace_add("write", lambda *_: self._sync_cfg())
@@ -824,6 +854,8 @@ class App(tk.Tk):
         self._loading = True
         c = dict(self.cfg)
         self.space_var.set(bool(c["space"]))
+        self.prefix_var.set(str(c["prefix"]))
+        self.suffix_var.set(str(c["suffix"]))
         self.reload_on_var.set(bool(c["reload_on"]))
         self.reload_min_var.set(int(c["reload_minutes"]))
         self.out_var.set(c["out_file"])
@@ -837,6 +869,7 @@ class App(tk.Tk):
         self._loading = False
         self._paint_color_buttons()
         self._set_obs_pill("off" if not c["obs_on"] else "waiting")
+        self._show_obs_fields(c["obs_on"])
 
     def _sync_cfg(self):
         if getattr(self, "_loading", True):
@@ -851,13 +884,16 @@ class App(tk.Tk):
         except (tk.TclError, ValueError):
             pass
         c["reload_on"] = bool(self.reload_on_var.get())
-        space_changed = c["space"] != bool(self.space_var.get())
+        changed = (c["space"], c["prefix"], c["suffix"]) != (
+            bool(self.space_var.get()), self.prefix_var.get(), self.suffix_var.get())
         c["space"] = bool(self.space_var.get())
-        if space_changed and self.current_text and c["out_file"]:
-            # update the txt right away instead of waiting for the next refresh
+        c["prefix"] = self.prefix_var.get()
+        c["suffix"] = self.suffix_var.get()
+        if changed and self.current_text and c["out_file"]:
+            # update the txt right away instead of waiting for the next read
             self.current_text = self.respace(self.current_text)
             try:
-                write_atomic(c["out_file"], self.current_text)
+                write_atomic(c["out_file"], decorate(self.current_text, c))
             except Exception:
                 pass
         c["out_file"] = self.out_var.get().strip()
@@ -870,6 +906,7 @@ class App(tk.Tk):
         c["obs_password"] = self.obs_pass_var.get()
         if was_on != c["obs_on"]:
             self._set_obs_pill("waiting" if c["obs_on"] else "off")
+            self._show_obs_fields(c["obs_on"])
         save_settings(c)
         self._show_value(self.current_text)
 
@@ -919,7 +956,7 @@ class App(tk.Tk):
             messagebox.showinfo(APP_NAME, "Choose an output text file first (Browse…).", parent=self)
             return
         if not os.path.exists(path):
-            write_atomic(path, self.current_text)
+            write_atomic(path, decorate(self.current_text, self.cfg))
         self._open_file(path)
 
     def _open_log(self):
@@ -998,6 +1035,18 @@ class App(tk.Tk):
     def _show_value(self, text):
         text = self.respace(text)
         self.money_lbl.configure(text=text or "—", fg=self.color_for(text))
+        line = decorate(text, self.cfg)
+        if line and line != text:
+            self.obs_line_lbl.configure(text=f"OBS shows: {line}")
+            self.obs_line_lbl.pack(fill="x", padx=16, pady=(2, 0), before=self.raw_lbl)
+        else:
+            self.obs_line_lbl.pack_forget()
+
+    def _show_obs_fields(self, on):
+        if on:
+            self.obs_fields.grid()
+        else:
+            self.obs_fields.grid_remove()
 
     def _set_obs_pill(self, state):
         look = {"connected": ("● Connected", "#5FE39B"), "testing": ("● Testing…", "#FACC15"),

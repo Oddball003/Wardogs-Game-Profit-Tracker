@@ -36,6 +36,8 @@ Windows may show a SmartScreen warning because the exe isn't signed: click
 ## Settings
 
 - **Space after sign** — `+ $3,740` or `+$3,740`.
+- **Text before / after amount** — optional, e.g. `Profit: ` gives
+  `Profit: + $3,740`. Spaces count. Nothing is added while the amount is blank.
 - **Refresh the Steam friends page** — off by default. The page updates live on
   its own; refreshing it often can get you rate limited by Steam, so only turn it
   on if the number stops updating.
