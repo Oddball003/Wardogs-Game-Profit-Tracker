@@ -1,5 +1,6 @@
 # personal data - never commit
 settings.json
+settings.json.broken
 activity_log.txt
 steam_browser_profile/
 .wardogs.lock

@@ -13,6 +13,7 @@ echo.
 echo This removes the app, its settings and its Steam sign-in from:
 echo   %~dp0
 echo   %~dp0dist
+echo   %LOCALAPPDATA%\%APP%
 echo.
 set /p OK="Continue? (y/N): "
 if /i not "%OK%"=="y" (
@@ -26,39 +27,49 @@ echo Closing the app if it's open...
 taskkill /f /im "%EXE%" >nul 2>nul
 timeout /t 2 >nul
 
-for %%D in ("%~dp0." "%~dp0dist") do (
+rem the text files the app writes (separate files + leaderboard), read from
+rem settings.json before it's deleted, one per line
+set "OUTLIST=%TEMP%\wardogs_outfiles.txt"
+if exist "%OUTLIST%" del /f /q "%OUTLIST%"
+for %%D in ("%~dp0." "%~dp0dist" "%LOCALAPPDATA%\%APP%") do (
     if exist "%%~D\settings.json" (
-        rem read the output txt location before settings.json is deleted
-        for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "try { (Get-Content -Raw '%%~D\settings.json' | ConvertFrom-Json).out_file } catch {}"`) do set "OUTFILE=%%P"
+        powershell -NoProfile -Command "try { $s = Get-Content -Raw '%%~D\settings.json' | ConvertFrom-Json; $f = @($s.people | Where-Object { $_.own_file -and $_.out_file } | ForEach-Object { $_.out_file }); if ($s.board_on -and $s.board_file) { $f += $s.board_file }; if ($s.out_file) { $f += $s.out_file }; $f | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique | Add-Content -LiteralPath '%OUTLIST%' } catch {}"
     )
-    if exist "%%~D\%EXE%"              del /f /q "%%~D\%EXE%"
-    if exist "%%~D\settings.json"      del /f /q "%%~D\settings.json"
-    if exist "%%~D\activity_log.txt"   del /f /q "%%~D\activity_log.txt"
-    if exist "%%~D\steam_browser_profile" rmdir /s /q "%%~D\steam_browser_profile"
-    if exist "%%~D\.wardogs.lock"      del /f /q "%%~D\.wardogs.lock"
+    if exist "%%~D\%EXE%"                   del /f /q "%%~D\%EXE%"
+    if exist "%%~D\settings.json"           del /f /q "%%~D\settings.json"
+    if exist "%%~D\settings.json.tmp"       del /f /q "%%~D\settings.json.tmp"
+    if exist "%%~D\settings.json.broken"    del /f /q "%%~D\settings.json.broken"
+    if exist "%%~D\activity_log.txt"        del /f /q "%%~D\activity_log.txt"
+    if exist "%%~D\steam_browser_profile"   rmdir /s /q "%%~D\steam_browser_profile"
+    if exist "%%~D\.wardogs.lock"           del /f /q "%%~D\.wardogs.lock"
 )
 rmdir /s /q "%~dp0build" >nul 2>nul
 del /q "%~dp0%APP%.spec" >nul 2>nul
 rmdir "%~dp0dist" >nul 2>nul
+rmdir "%LOCALAPPDATA%\%APP%" >nul 2>nul
 echo Removed the app, settings and Steam sign-in.
 
-if defined OUTFILE if exist "!OUTFILE!" (
+if exist "%OUTLIST%" (
     echo.
-    echo The app was writing to:  !OUTFILE!
-    set /p DELTXT="Delete that text file too? (y/N): "
+    echo The app was writing to these text files:
+    for /f "usebackq delims=" %%P in ("%OUTLIST%") do echo   %%P
+    set /p DELTXT="Delete them too? (y/N): "
     if /i "!DELTXT!"=="y" (
-        del /f /q "!OUTFILE!"
-        if exist "!OUTFILE!.tmp" del /f /q "!OUTFILE!.tmp"
+        for /f "usebackq delims=" %%P in ("%OUTLIST%") do (
+            del /f /q "%%P" >nul 2>nul
+            if exist "%%P.tmp" del /f /q "%%P.tmp" >nul 2>nul
+        )
         echo Deleted.
     )
+    del /f /q "%OUTLIST%" >nul 2>nul
 )
 
 echo.
-set /p PIP="Also remove the Python packages used to build it (playwright, obsws-python, pyinstaller)? (y/N): "
+set /p PIP="Also remove the Python packages used to build it (playwright, obsws-python, pillow, pyinstaller)? (y/N): "
 if /i "%PIP%"=="y" (
     set "PY=python"
     where py >nul 2>nul && set "PY=py"
-    !PY! -m pip uninstall -y playwright obsws-python pyinstaller pyinstaller-hooks-contrib
+    !PY! -m pip uninstall -y playwright obsws-python pillow pyinstaller pyinstaller-hooks-contrib
 )
 
 if exist "%LOCALAPPDATA%\ms-playwright" (
