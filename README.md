@@ -143,3 +143,12 @@ It installs the dependencies (playwright, obsws-python, pillow, pyinstaller) and
 Run `uninstall.bat`. It removes the exe, settings, Steam sign-in and log (next
 to the exe and in `%LOCALAPPDATA%\Wardogs Profit Tracker`), offers to delete the
 text files it wrote, and optionally the build tools.
+
+## Downloads
+
+[![Latest release](https://img.shields.io/github/v/release/Oddball003/Wardogs-Game-Profit-Tracker?label=latest)](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Oddball003/Wardogs-Game-Profit-Tracker/total)](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases)
+
+- **[Download Wardogs.Profit.Tracker.exe](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest/download/Wardogs.Profit.Tracker.exe)** (always the newest version)
+- [Newest release notes](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest)
+- [All releases](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases)
