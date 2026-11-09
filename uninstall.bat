@@ -10,7 +10,8 @@ echo ============================================
 echo   Uninstall %APP%
 echo ============================================
 echo.
-echo This removes the app, its settings and its Steam sign-in from:
+echo This removes the app, its settings, its Steam sign-in and Start with
+echo Windows (if it was on) from:
 echo   %~dp0
 echo   %~dp0dist
 echo   %LOCALAPPDATA%\%APP%
@@ -47,7 +48,9 @@ rmdir /s /q "%~dp0build" >nul 2>nul
 del /q "%~dp0%APP%.spec" >nul 2>nul
 rmdir "%~dp0dist" >nul 2>nul
 rmdir "%LOCALAPPDATA%\%APP%" >nul 2>nul
-echo Removed the app, settings and Steam sign-in.
+rem Start with Windows (Advanced): the sign-in entry
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "%APP%" /f >nul 2>nul
+echo Removed the app, settings, Steam sign-in and Start with Windows.
 
 if exist "%OUTLIST%" (
     echo.
@@ -65,11 +68,11 @@ if exist "%OUTLIST%" (
 )
 
 echo.
-set /p PIP="Also remove the Python packages used to build it (playwright, obsws-python, pillow, pyinstaller)? (y/N): "
+set /p PIP="Also remove the Python packages used to build it (playwright, obsws-python, pillow, pystray, pyinstaller)? (y/N): "
 if /i "%PIP%"=="y" (
     set "PY=python"
     where py >nul 2>nul && set "PY=py"
-    !PY! -m pip uninstall -y playwright obsws-python pillow pyinstaller pyinstaller-hooks-contrib
+    !PY! -m pip uninstall -y playwright obsws-python pillow pystray pyinstaller pyinstaller-hooks-contrib
 )
 
 if exist "%LOCALAPPDATA%\ms-playwright" (

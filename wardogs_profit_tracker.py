@@ -17,6 +17,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
 APP_NAME = "Wardogs Profit Tracker"
 
@@ -172,7 +173,7 @@ DEFAULTS = {
     # "obs_source" is the OBS Text source coloured by their amount (OBS color on)
     "people": [{"who": "", "name_mode": "steam", "label": "", "own_file": True,
                 "out_file": "", "file_name": False, "board": False,
-                "obs_source": ""}],
+                "obs_source": "", "overlay": False}],
     # the leaderboard: one file with a line per person ticked "Leaderboard"
     "board_on": False,
     "board_file": "",
@@ -180,6 +181,30 @@ DEFAULTS = {
     "board_ranks": True,      # "1. ", "2. " ... in front of each line
     "board_names": True,      # "Name: " in front of each amount
     "space": False,           # "+$3,740" (True: "+ $3,740")
+    "tray": True,             # minimising hides the window to a tray icon
+    "overlay_port": 8765,     # browser overlays ask 127.0.0.1:<port>/value?person=N
+    "board_overlay": False,   # the leaderboard browser overlay (leaderboard.html)
+    "board_top": 0,           # show only the top N people (0: everyone)
+    "board_top_n": 5,         # the N last picked, kept while All is chosen
+    "board_first": "crown",   # the overlay's 1st place: "crown", "number" or "image"
+    "board_icon": "",         # the picture for "image" (any png / jpg / gif / webp / svg)
+    # Advanced › Browser overlays: the look of both overlay pages
+    "overlay_font": "Barlow",   # the overlays' font: one of WEB_FONTS, or any font installed here
+    "overlay_size": 18,       # digit height in px (the game's HUD is 18)
+    "overlay_color": "#C5C2BF",
+    "overlay_pl": False,      # colour the money HUD by profit / loss
+    "overlay_pl_board": False,  # colour the leaderboard's amounts by profit / loss
+    "overlay_profit_color": "#5FE39B",
+    "overlay_loss_color": "#FF8A7A",
+    "overlay_bg_mode": "color",       # the box behind the text: "color" or "image"
+    "overlay_bg_color": "#000000",
+    "overlay_bg_opacity": 45,         # percent (0 = no box, 100 = solid)
+    "overlay_bg_image": "",
+    "overlay_hud_w": 0,               # money HUD box width / height in px (0: fit the number)
+    "overlay_hud_h": 0,
+    "overlay_board_w": 0,             # leaderboard panel width (0: fit the names)
+    "obs_fit": False,                 # size the OBS Browser sources to fit (over OBS WebSocket)
+    "adv_open": False,                # Advanced left open last time
     "keep_last": True,
     "color_on": True,         # colour by profit / loss: the app and each person's OBS source
     "profit_color": "#5FE39B",
@@ -284,6 +309,7 @@ def clean_people(people):
                         "file_name": bool(p.get("file_name", named)),
                         "board": bool(p.get("board", False)),
                         "obs_source": str(p.get("obs_source", "")).strip(),
+                        "overlay": bool(p.get("overlay", False)),
                         "_named": named})  # only used to carry old settings over
     return out or [dict(new_person(), own_file=True, board=False)]
 
@@ -291,7 +317,8 @@ def clean_people(people):
 def new_person(who=""):
     """A person added with + Add person: on the leaderboard, no file of their own."""
     return {"who": who, "name_mode": "steam", "label": "", "own_file": False,
-            "out_file": "", "file_name": False, "board": True, "obs_source": ""}
+            "out_file": "", "file_name": False, "board": True, "obs_source": "",
+            "overlay": False}
 
 
 def migrate_files(saved, s):
@@ -323,12 +350,19 @@ def amount_value(text):
     return -v if text.strip().startswith("-") else v
 
 
-def leaderboard_lines(people, results, cfg):
-    """The leaderboard file's lines: everyone ticked "Leaderboard" who has an
-    amount right now, highest first (or as listed), optionally numbered."""
+def leaderboard_rows(people, results, cfg):
+    """Everyone ticked "Leaderboard" who has an amount right now, highest
+    first (or as listed)."""
     rows = [r for p, r in zip(people, results) if p["board"] and r["text"]]
     if cfg.get("board_order", "amount") == "amount":
         rows.sort(key=lambda r: amount_value(r["text"]), reverse=True)  # stable on ties
+    top = cfg.get("board_top", 0)
+    return rows[:top] if isinstance(top, int) and top > 0 else rows
+
+
+def leaderboard_lines(people, results, cfg):
+    """The leaderboard file's lines, optionally numbered and named."""
+    rows = leaderboard_rows(people, results, cfg)
     ranks, names = cfg.get("board_ranks", True), cfg.get("board_names", True)
     out = []
     for i, r in enumerate(rows, 1):
@@ -359,7 +393,7 @@ def fix_types(s):
         if isinstance(default, bool):
             ok = isinstance(value, bool)
         elif isinstance(default, int):
-            ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+            ok = isinstance(value, int) and not isinstance(value, bool) and value >= (default > 0)
         else:
             ok = isinstance(value, type(default))
         if key.endswith("_color"):
@@ -404,6 +438,8 @@ def load_settings():
         s["people"][0]["obs_source"] = str(saved["obs_source"]).strip()
     if isinstance(saved, dict) and saved and "board_on" not in saved:
         migrate_files(saved, s)  # settings from an older version
+    if isinstance(saved, dict) and "overlay_pl" in saved and "overlay_pl_board" not in saved:
+        s["overlay_pl_board"] = bool(saved["overlay_pl"])  # was one switch for both overlays
     if isinstance(saved, dict) and "obs_on" in saved:
         # older: a separate "OBS color" switch. Now one colour switch does both,
         # and Connect / Disconnect decides whether OBS is used
@@ -417,6 +453,16 @@ def load_settings():
         p.pop("_named", None)
     if s.get("board_order") not in ("amount", "list"):
         s["board_order"] = "amount"
+    for key, hi in (("overlay_bg_opacity", 100), ("overlay_hud_w", BOX_MAX), ("overlay_hud_h", BOX_MAX),
+                    ("overlay_board_w", BOX_MAX)):
+        v = s.get(key)
+        s[key] = max(0, min(v, hi)) if isinstance(v, int) and not isinstance(v, bool) else DEFAULTS[key]
+    if s.get("overlay_bg_mode") not in ("color", "image"):
+        s["overlay_bg_mode"] = "color"
+    size = s.get("overlay_size")
+    s["overlay_size"] = max(OVERLAY_SIZE_MIN, min(size, OVERLAY_SIZE_MAX)) if isinstance(size, int) else 18
+    if s.get("board_first") not in ("crown", "number", "image"):
+        s["board_first"] = "crown"
     fix_types(s)
     if s.get("reload_on"):
         # the refresh is Off / 15 / 30 / 60 min now; an older saved time goes to the nearest
@@ -501,6 +547,232 @@ def fetch_avatar(url, size):
         return Image.open(io.BytesIO(data)).convert("RGB").resize((size, size), Image.LANCZOS)
     except Exception:
         return None
+
+
+def tray_image(size=64):
+    """The tray icon: a dark rounded square with a green $ (Pillow)."""
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((0, 0, size - 1, size - 1), radius=size // 5, fill=(18, 22, 29, 255),
+                        outline=(76, 141, 255, 255), width=max(2, size // 22))
+    try:
+        font = ImageFont.truetype("segoeuib.ttf", int(size * 0.72))
+    except OSError:
+        font = ImageFont.load_default()
+    d.text((size / 2, size / 2), "$", fill=(95, 227, 155, 255), font=font, anchor="mm")
+    return img
+
+
+# ---------------- browser overlay feed ----------------
+# The money HUD page (overlay/money_hud.html) is an OBS Browser Source that asks
+# this app for a person's number ~10 times a second. Only this PC can reach it
+# (127.0.0.1), and it only ever answers the amounts already shown in the app.
+
+HUD_NAME = "money_hud.html"
+BOARD_NAME = "leaderboard.html"
+
+
+def bundled_hud(name=HUD_NAME):
+    """An overlay page shipped with the app (inside the exe, or next to the .py)."""
+    base = getattr(sys, "_MEIPASS", HERE)
+    return os.path.join(base, "overlay", name)
+
+
+PAGE_VERSION = re.compile(rb"wardogs-page-version:\s*(\d+)")
+
+
+def page_version(path):
+    """The version number in an overlay page (pages from before 1.4 have none: 1)."""
+    try:
+        with open(path, "rb") as f:
+            m = PAGE_VERSION.search(f.read(4096))
+        return int(m.group(1)) if m else 1
+    except OSError:
+        return 0
+
+
+def install_hud(folder, name=HUD_NAME):
+    """Copy an overlay page into the save folder, so OBS can open it from a
+    fixed place. Your copy (and any CSS tweaks in it) is kept until the app
+    ships a newer version of the page: then the old copy is saved next to it
+    as <name>.old.html and replaced."""
+    dst = os.path.join(folder, "overlay", name)
+    try:
+        src = bundled_hud(name)
+        if not os.path.exists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
+        elif page_version(dst) < page_version(src):
+            shutil.copyfile(dst, dst[:-len(".html")] + ".old.html")
+            shutil.copyfile(src, dst)
+    except OSError:
+        pass
+    return dst
+
+
+BOARD_TOP_MAX = 30
+OVERLAY_SIZE_MIN, OVERLAY_SIZE_MAX = 10, 72
+
+
+BOX_MAX = 3840
+# fonts the overlays load from Google Fonts (free; OBS needs internet when it
+# starts the page). Any font installed on this PC works too.
+WEB_FONTS = ("Barlow", "Barlow Condensed", "Barlow Semi Condensed", "Rajdhani", "Oswald", "Teko",
+             "Saira", "Saira Condensed", "Chakra Petch", "Exo 2", "Orbitron", "Russo One",
+             "Black Ops One", "Bebas Neue", "Anton", "Roboto", "Roboto Condensed", "Roboto Mono",
+             "Share Tech Mono", "Inter")
+FONT_SEPARATOR = "──── installed on this PC ────"
+
+
+def overlay_style(cfg, page="hud"):
+    """The look the overlay pages apply (sent with every answer, so a change
+    shows within a moment)."""
+    image = cfg["overlay_bg_mode"] == "image" and icon_version(cfg["overlay_bg_image"]) or ""
+    pl = cfg["overlay_pl_board"] if page == "board" else cfg["overlay_pl"]
+    font = cfg["overlay_font"].strip() or "Barlow"
+    return {"font": font, "webFont": font in WEB_FONTS,
+            "size": cfg["overlay_size"], "color": cfg["overlay_color"], "pl": bool(pl),
+            "profit": cfg["overlay_profit_color"], "loss": cfg["overlay_loss_color"],
+            "bg": cfg["overlay_bg_color"], "opacity": cfg["overlay_bg_opacity"], "image": image,
+            "hudW": cfg["overlay_hud_w"], "hudH": cfg["overlay_hud_h"], "boardW": cfg["overlay_board_w"]}
+
+
+def board_count(cfg):
+    """How many rows the leaderboard can show at most (for sizing its source)."""
+    n = sum(1 for p in cfg["people"] if p.get("board"))
+    top = cfg.get("board_top", 0)
+    return max(1, min(n, top) if top else n)
+
+
+def obs_fit_sizes(cfg):
+    """OBS Browser source sizes that fit each overlay: {page name: (w, h)}.
+    Generous on width (the pages are anchored top-right, so spare room is
+    simply transparent)."""
+    import math
+    k = cfg["overlay_size"] / 18
+    hud = (cfg["overlay_hud_w"] or math.ceil(320 * k), cfg["overlay_hud_h"] or math.ceil(39 * k))
+    # panel: padding 10 + 8, heading 15 + 6, 1st row 42, then 32 + 1 divider per row
+    rows = board_count(cfg)
+    board = (cfg["overlay_board_w"] or math.ceil(460 * k),
+             math.ceil((10 + 8 + 15 + 6 + 42 + 33 * (rows - 1)) * k) + 4)
+    return {HUD_NAME: hud, BOARD_NAME: board}
+
+
+def obs_browser_sources(client):
+    """[(source name, page)] for every OBS Browser source showing one of our pages."""
+    out = []
+    for item in client.get_input_list("browser_source").inputs:
+        name = item.get("inputName", "")
+        try:
+            st = client.get_input_settings(name).input_settings
+        except Exception as e:
+            if obs_request_error(e):
+                continue
+            raise
+        where = (st.get("url", "") if not st.get("is_local_file") else st.get("local_file", "")) or ""
+        where = where.split("?")[0].replace("%20", " ")
+        for page in (HUD_NAME, BOARD_NAME):
+            if where.endswith(page):
+                out.append((name, page))
+    return out
+ICON_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+              ".webp": "image/webp", ".svg": "image/svg+xml"}
+
+
+def icon_version(path):
+    """Changes whenever the picture does, so the overlay loads the new one."""
+    try:
+        st = os.stat(path)
+        return f"{int(st.st_mtime)}-{st.st_size}"
+    except (OSError, TypeError, ValueError):
+        return ""
+
+
+def overlay_link(path, person=None):
+    """The URL to paste into an OBS Browser Source (Local file unticked)."""
+    from urllib.parse import quote
+    url = "file:///" + quote(path.replace("\\", "/"), safe="/:")
+    return url + (f"?person={person}" if person is not None else "")
+
+
+LOCAL_ORIGIN = re.compile(r"https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
+
+
+class OverlayServer:
+    """Answers GET /value?person=N with {"text": "+$3,740"} from texts() (a
+    list, one per person, kept current by the tracker), and serves the HUD
+    page at /money_hud.html. 127.0.0.1 only."""
+
+    def __init__(self, port, texts, board=lambda: {"rows": []}, files=lambda: {}, style=lambda page: None):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from urllib.parse import parse_qs, urlparse
+
+        class Handler(BaseHTTPRequestHandler):
+            def _send(self, code, body, ctype):
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "no-store")
+                # the overlay pages are opened from a file (Origin "null"); websites
+                # you visit may not read your amounts or pictures from here
+                origin = self.headers.get("Origin", "")
+                if origin == "null" or LOCAL_ORIGIN.match(origin):
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Access-Control-Allow-Private-Network", "true")
+                    self.send_header("Vary", "Origin")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_OPTIONS(self):
+                self._send(204, b"", "text/plain")
+
+            def do_GET(self):
+                url = urlparse(self.path)
+                if url.path == "/value":
+                    try:
+                        n = int(parse_qs(url.query).get("person", ["1"])[0])
+                    except ValueError:
+                        n = 1
+                    t = texts()
+                    text = t[n - 1] if 1 <= n <= len(t) else ""
+                    self._send(200, json.dumps({"text": text, "style": style("hud")}).encode(), "application/json")
+                elif url.path == "/board":
+                    self._send(200, json.dumps(dict(board(), style=style("board"))).encode(), "application/json")
+                elif url.path in ("/icon", "/bg"):
+                    # your pictures (1st place, background), from wherever they are on disk
+                    path = files().get(url.path[1:], "")
+                    ctype = ICON_TYPES.get(os.path.splitext(path)[1].lower())
+                    try:
+                        if not ctype or os.path.getsize(path) > 8 * 1024 * 1024:
+                            raise OSError
+                        with open(path, "rb") as f:
+                            self._send(200, f.read(), ctype)
+                    except OSError:
+                        self._send(404, b"not found", "text/plain")
+                elif url.path in ("/", "/" + HUD_NAME, "/" + BOARD_NAME):
+                    try:
+                        page = BOARD_NAME if url.path == "/" + BOARD_NAME else HUD_NAME
+                        with open(bundled_hud(page), "rb") as f:
+                            self._send(200, f.read(), "text/html; charset=utf-8")
+                    except OSError:
+                        self._send(404, b"not found", "text/plain")
+                else:
+                    self._send(404, b"not found", "text/plain")
+
+            def log_message(self, *args):
+                pass  # quiet: it's asked 10 times a second
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.httpd.daemon_threads = True
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self):
+        try:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+        except Exception:
+            pass
 
 
 _write_lock = threading.Lock()  # the tracker and the window both write files
@@ -877,6 +1149,16 @@ class Worker(threading.Thread):
                 first = results[0]
                 self.emit("value", first["text"], first["raw"], first["kept"])
                 self.emit("people", results, board if cfg["board_on"] else None)
+                # for the browser overlays: only people with Overlay switched on
+                show = cfg["board_on"] and cfg.get("board_overlay")
+                self.app.overlay_board = {
+                    "rows": [{"name": r["label"], "text": r["text"]}
+                             for r in leaderboard_rows(people, results, cfg)] if show else [],
+                    "ranks": bool(cfg["board_ranks"]), "names": bool(cfg["board_names"]),
+                    "first": cfg["board_first"],
+                    "icon": icon_version(cfg["board_icon"]) if cfg["board_first"] == "image" else ""}
+                self.app.overlay_texts = [r["text"] if p.get("overlay") else ""
+                                          for p, r in zip(people, results)]
                 # OBS colour: each person's own Text source, from their own amount,
                 # while colouring is on and you haven't pressed Disconnect
                 use_obs = cfg["color_on"] and cfg["obs_connect"]
@@ -987,42 +1269,109 @@ class Chip(tk.Frame):
 
 
 class Switch(tk.Canvas):
-    """A small on/off toggle switch tied to a BooleanVar."""
-    W, H = 40, 22
+    """A small on/off toggle switch tied to a BooleanVar: a smooth rounded
+    track with a white knob that slides across and shows a tick (on) or a
+    cross (off). Drawn with Pillow at 4x and scaled down, so the edges are
+    clean (Tk's own circles are jagged)."""
+    W, H = 46, 24
+    SS = 4               # supersampling
+    STEPS = 6            # animation frames for a slide
+    FRAME_MS = 16
+    _cache = {}
 
     def __init__(self, parent, variable, bg=BG, on_color=ACCENT, off_color="#3A4352"):
         super().__init__(parent, width=self.W, height=self.H, bg=bg,
                          highlightthickness=0, bd=0, cursor="hand2", takefocus=1)
         self.var = variable
         self.on_color, self.off_color = on_color, off_color
+        self.pos = 1.0 if variable.get() else 0.0   # 0 = off (left), 1 = on (right)
+        self._anim = None
+        self._img = None
         self.bind("<Button-1>", self.toggle)
         self.bind("<space>", self.toggle)
         self.bind("<Return>", self.toggle)
         self.bind("<FocusIn>", lambda e: self.draw())
         self.bind("<FocusOut>", lambda e: self.draw())
-        variable.trace_add("write", lambda *_: self.draw())
+        variable.trace_add("write", lambda *_: self._slide())
         self.draw()
 
     def toggle(self, _=None):
         self.var.set(not self.var.get())
 
+    def _slide(self):
+        target = 1.0 if self.var.get() else 0.0
+        if self._anim is not None:
+            self.after_cancel(self._anim)
+            self._anim = None
+        if not self.winfo_viewable():
+            self.pos = target       # hidden: no point animating
+            self.draw()
+            return
+
+        def step():
+            d = 1.0 / self.STEPS
+            self.pos = min(target, self.pos + d) if target > self.pos else max(target, self.pos - d)
+            self.draw()
+            self._anim = self.after(self.FRAME_MS, step) if self.pos != target else None
+        step()
+
+    @staticmethod
+    def _mix(a, b, t):
+        a, b = [int(a[i:i + 2], 16) for i in (1, 3, 5)], [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+        return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+    def _image(self, pos, focused):
+        key = (round(pos, 3), self.on_color, self.off_color, focused)
+        img = self._cache.get(key)
+        if img is not None:
+            return img
+        from PIL import Image, ImageDraw
+        k = self.SS
+        w, h = self.W * k, self.H * k
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        track = self._mix(self.off_color, self.on_color, pos)
+        d.rounded_rectangle((0, 0, w - 1, h - 1), radius=h // 2, fill=track)
+        if focused:
+            d.rounded_rectangle((0, 0, w - 1, h - 1), radius=h // 2, outline=(127, 180, 255), width=k)
+        pad, knob = 3 * k, h - 6 * k
+        x = pad + (w - 2 * pad - knob) * pos
+        d.ellipse((x, pad, x + knob, pad + knob), fill=(255, 255, 255))
+        # tick when on, cross when off, in the track's colour
+        cx, cy, r, lw = x + knob / 2, pad + knob / 2, knob * 0.22, round(1.8 * k)
+        if pos >= 0.5:
+            d.line([(cx - r, cy + r * 0.05), (cx - r * 0.25, cy + r * 0.8), (cx + r * 1.05, cy - r * 0.75)],
+                   fill=track, width=lw, joint="curve")
+        else:
+            d.line([(cx - r * 0.8, cy - r * 0.8), (cx + r * 0.8, cy + r * 0.8)], fill=track, width=lw)
+            d.line([(cx - r * 0.8, cy + r * 0.8), (cx + r * 0.8, cy - r * 0.8)], fill=track, width=lw)
+        img = im.resize((self.W, self.H), Image.LANCZOS)
+        self._cache[key] = img
+        return img
+
     def draw(self):
-        self.delete("all")
-        on = bool(self.var.get())
-        w, h, r = self.W, self.H, self.H / 2
-        track = self.on_color if on else self.off_color
-        # rounded track: two circles + a rectangle
-        self.create_oval(0, 0, h, h, fill=track, outline=track)
-        self.create_oval(w - h, 0, w, h, fill=track, outline=track)
-        self.create_rectangle(r, 0, w - r, h, fill=track, outline=track)
-        # knob
-        pad = 3
-        x = w - h + pad if on else pad
-        self.create_oval(x, pad, x + h - 2 * pad, h - pad, fill="#FFFFFF", outline="#FFFFFF")
         try:
             focused = self.focus_get() is self
         except (KeyError, tk.TclError):
             focused = False
+        try:
+            from PIL import ImageTk
+            self._img = ImageTk.PhotoImage(self._image(self.pos, focused), master=self)
+        except Exception:
+            self._img = None
+        self.delete("all")
+        if self._img is not None:
+            self.create_image(0, 0, image=self._img, anchor="nw")
+            return
+        # no Pillow: plain Tk drawing
+        on = self.pos >= 0.5
+        w, h, r = self.W, self.H, self.H / 2
+        track = self.on_color if on else self.off_color
+        self.create_oval(0, 0, h, h, fill=track, outline=track)
+        self.create_oval(w - h, 0, w, h, fill=track, outline=track)
+        self.create_rectangle(r, 0, w - r, h, fill=track, outline=track)
+        x = w - h + 3 if on else 3
+        self.create_oval(x, 3, x + h - 6, h - 3, fill="#FFFFFF", outline="#FFFFFF")
         if focused:
             self.create_rectangle(0, 0, w - 1, h - 1, outline="#7FB4FF")
 
@@ -1174,6 +1523,17 @@ class App(tk.Tk):
         # resizes or is minimised rather than leave it floating on its own
         self.bind("<Configure>", self._close_picker_on_move, add="+")
         self.bind("<Unmap>", self._close_picker_on_move, add="+")
+        # minimise to the tray (with "Minimize to tray" on)
+        self.tray = None
+        self.bind("<Unmap>", self._maybe_to_tray, add="+")
+        self._show_signal = make_show_signal()
+        # browser overlays: the HUD page in the save folder + the number feed
+        self.overlay_texts = []
+        self.overlay_board = {"rows": []}
+        self.board_path = install_hud(DATA_DIR, BOARD_NAME)
+        self.hud_path = install_hud(DATA_DIR)
+        self.overlay = None
+        self._update_overlay_server()
         self.start()
 
     # ---- look ----
@@ -1379,7 +1739,7 @@ class App(tk.Tk):
         li.pack(fill="x", padx=12, pady=10)
         head = tk.Frame(li, bg=SH)
         head.pack(fill="x")
-        self._label(head, "Leaderboard file", SH, TEXT, 10, True).pack(side="left")
+        self._label(head, "Leaderboard", SH, TEXT, 10, True).pack(side="left")
         self.board_on_var = tk.BooleanVar()
         Switch(head, self.board_on_var, bg=SH).pack(side="right")
         self.board_body = tk.Frame(li, bg=SH)
@@ -1403,28 +1763,134 @@ class App(tk.Tk):
         self._label(crow, "Show", SH).pack(side="left")
         Chip(crow, "#", "Number places", self.ranks_var).pack(side="left", padx=(12, 0))
         Chip(crow, "👤", "Names", self.board_names_var).pack(side="left", padx=(8, 0))
-        hint = self._label(self.board_body, "Everyone with Leaderboard on, a line each — works alongside "
-                                            "their separate files. People with no amount right now are left off.",
+        # how many people: everyone, or just the top N
+        trow = tk.Frame(self.board_body, bg=SH)
+        trow.pack(fill="x", pady=(8, 0))
+        self._label(trow, "How many", SH).pack(side="left")
+        self.board_top_var = tk.StringVar()   # "all" or "top"
+        seg, self.top_btns = self._segmented(trow, (("all", "All"), ("top", "Top")), self.board_top_var)
+        seg.pack(side="left", padx=(12, 0))
+        # − N +: how many, lit only while Top is chosen (clicking it picks Top)
+        self.board_top_n_var = tk.IntVar()
+        step = tk.Frame(trow, bg=BORDER)
+        step.pack(side="left", padx=(8, 0))
+        self.top_minus = tk.Label(step, text="−", font=("Segoe UI", 10), padx=10, pady=4, cursor="hand2")
+        self.top_num = tk.Label(step, font=("Segoe UI", 10), width=3, pady=4)
+        self.top_plus = tk.Label(step, text="+", font=("Segoe UI", 10), padx=10, pady=4, cursor="hand2")
+        for w_ in (self.top_minus, self.top_num, self.top_plus):
+            w_.pack(side="left", padx=1, pady=1)
+        self.top_minus.bind("<Button-1>", lambda e: self._step_top(-1))
+        self.top_plus.bind("<Button-1>", lambda e: self._step_top(1))
+        self.top_people = self._label(trow, "", SH, "#8A93A3", 8)
+        self.top_people.pack(side="left", padx=(8, 0))
+        for v in (self.board_top_var, self.board_top_n_var):
+            v.trace_add("write", lambda *_: self._paint_top())
+        # the leaderboard browser overlay
+        brow = tk.Frame(self.board_body, bg=SH)
+        brow.pack(fill="x", pady=(8, 0))
+        self._label(brow, "Overlay", SH).pack(side="left")
+        self.board_overlay_var = tk.BooleanVar()
+        Chip(brow, "📺", "Browser overlay", self.board_overlay_var).pack(side="left", padx=(12, 0))
+        # shown while the overlay is on: its link, and what 1st place gets
+        self.board_link_row = tk.Frame(self.board_body, bg=SH)
+        lrow = tk.Frame(self.board_link_row, bg=SH)
+        lrow.pack(fill="x")
+        self._label(lrow, "Overlay link", SH, LABEL, 9).pack(side="left")
+        self.board_link = tk.Label(lrow, text=f"…/overlay/{BOARD_NAME}", bg=SH, fg=ACCENT,
+                                   cursor="hand2", font=("Segoe UI", 9, "underline"), anchor="w")
+        self.board_link.pack(side="left", padx=(8, 0))
+        self.board_link.bind("<Button-1>", lambda e: self._copy_board_link())
+        frow = tk.Frame(self.board_link_row, bg=SH)
+        frow.pack(fill="x", pady=(8, 0))
+        self._label(frow, "1st place", SH).pack(side="left")
+        self.board_first_var = tk.StringVar()
+        seg, self.first_btns = self._segmented(
+            frow, (("crown", "👑 Crown"), ("number", "# Number"), ("image", "🖼 Custom")), self.board_first_var)
+        seg.pack(side="left", padx=(10, 0))
+        self.icon_row = tk.Frame(self.board_link_row, bg=SH)
+        self.icon_name = self._label(self.icon_row, "", SH, LABEL, 9)
+        self.icon_name.pack(side="left", fill="x", expand=True)
+        ttk.Button(self.icon_row, text="Choose image…", command=self._browse_icon).pack(side="right")
+        self._board_link_after = brow
+        hint = self._label(self.board_body, "Everyone with Leaderboard on, a line each — as a text file "
+                                            "(choose one above, or leave it empty) and / or a browser "
+                                            "overlay. People with no amount right now are left off.",
                            SH, "#8A93A3", 8)
         hint.configure(wraplength=470, justify="left")
         hint.pack(anchor="w", pady=(6, 0))
 
 
 
+        # Advanced (closed by default): refreshing the friends page
+        self.adv_head = tk.Label(body, text="▸  Advanced", bg=BG, fg=TEXT, cursor="hand2",
+                                 font=("Segoe UI", 10, "bold"), anchor="w")
+        self.adv_head.pack(anchor="w", pady=(14, 0))
+        self.adv_head.bind("<Button-1>", lambda e: self._show_advanced(not self.adv_open))
+        AB = "#11151C"
+        self.adv_body = tk.Frame(body, bg=AB, highlightbackground="#232A35", highlightthickness=1)
+        ab = tk.Frame(self.adv_body, bg=AB)
+        ab.pack(fill="x", padx=12, pady=10)
+        # keep showing the last amount while the game shows none (menus)
+        kr = tk.Frame(ab, bg=AB)
+        kr.pack(fill="x")
+        self._label(kr, "Keep last amount", AB, TEXT).pack(side="left")
+        self.keep_var = tk.BooleanVar()
+        Switch(kr, self.keep_var, bg=AB).pack(side="right")
+        keep_hint = self._label(ab, "While the game shows no money (menus, loading) the overlays and "
+                                    "files keep the last amount instead of going blank.", AB, "#8A93A3", 8)
+        keep_hint.configure(wraplength=470, justify="left")
+        keep_hint.pack(anchor="w", pady=(4, 10))
+        # +$3,740 or + $3,740 — the buttons show both, so no label
+        self.space_var = tk.BooleanVar()
+        seg, self.space_btns = self._segmented(
+            ab, ((False, "+$3,740"), (True, "+ $3,740")), self.space_var)
+        seg.pack(anchor="w", pady=(0, 10))
+        rr = tk.Frame(ab, bg=AB)
+        rr.pack(fill="x")
+        self._label(rr, "Refresh friends page", AB, TEXT).pack(side="left")
+        self.refresh_var = tk.IntVar()  # minutes; 0 = off
+        seg, self.refresh_btns = self._segmented(
+            rr, [(v, f"{v} min" if v else "Off") for v in REFRESH_CHOICES], self.refresh_var)
+        seg.pack(side="left", padx=(12, 0))
+        warn = self._label(ab, "Off is best — the page updates live. Only pick a time if the number "
+                               "stops updating; refreshing often can get you rate limited by Steam.",
+                           AB, "#E0A458", 8)
+        warn.configure(wraplength=470, justify="left")
+        warn.pack(anchor="w", pady=(6, 0))
+        tr = tk.Frame(ab, bg=AB)
+        tr.pack(fill="x", pady=(10, 0))
+        self._label(tr, "Minimize to tray", AB, TEXT).pack(side="left")
+        self.tray_var = tk.BooleanVar()
+        Switch(tr, self.tray_var, bg=AB).pack(side="right")
+        tray_hint = self._label(ab, "Minimising hides the window to a tray icon by the clock — click it "
+                                    "to bring the window back, right-click for Start / Stop and Quit.",
+                                AB, "#8A93A3", 8)
+        tray_hint.configure(wraplength=470, justify="left")
+        tray_hint.pack(anchor="w", pady=(4, 0))
+        sr0 = tk.Frame(ab, bg=AB)
+        sr0.pack(fill="x", pady=(10, 0))
+        self._label(sr0, "Start with Windows", AB, TEXT).pack(side="left")
+        self.startup_var = tk.BooleanVar(value=bool(startup_entry()))
+        Switch(sr0, self.startup_var, bg=AB).pack(side="right")
+        self.startup_var.trace_add("write", lambda *_: self._set_startup())
+        st_hint = self._label(ab, "Opens when you sign in to Windows and starts tracking — straight to "
+                                  "the tray when Minimize to tray is on.", AB, "#8A93A3", 8)
+        st_hint.configure(wraplength=470, justify="left")
+        st_hint.pack(anchor="w", pady=(4, 0))
         # colors
-        cr = tk.Frame(form, bg=BG)
-        cr.grid(row=9, column=0, columnspan=2, sticky="ew")
-        self.color_head = self._label(cr, "Text color")
+        cr = tk.Frame(ab, bg=AB)
+        cr.pack(fill="x", pady=(14, 0))
+        self.color_head = self._label(cr, "App / OBS text color", AB)
         self.color_head.pack(side="left")
         # switch, like OBS color: off dims the heading and both colour buttons
         self.color_on_var = tk.BooleanVar()
-        Switch(cr, self.color_on_var, bg=BG).pack(side="right")
-        cl = self._label(cr, "Color by profit / loss", BG, LABEL, 9)
+        Switch(cr, self.color_on_var, bg=AB).pack(side="right")
+        cl = self._label(cr, "Color by profit / loss", AB, LABEL, 9)
         cl.configure(cursor="hand2")
         cl.pack(side="right", padx=(0, 8))
         cl.bind("<Button-1>", lambda e: self.color_on_var.set(not self.color_on_var.get()))
-        cc = tk.Frame(form, bg=BG)
-        cc.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(4, 10))
+        cc = tk.Frame(ab, bg=AB)
+        cc.pack(fill="x", pady=(4, 0))
         cc.columnconfigure(0, weight=1)
         cc.columnconfigure(1, weight=1)
         self.profit_btn = self._color_button(cc, "+ Profit", "profit_color")
@@ -1433,8 +1899,8 @@ class App(tk.Tk):
         self.loss_btn.grid(row=0, column=1, sticky="ew", padx=(12, 0))
 
         # OBS card
-        obs = tk.Frame(body, bg=CARD, highlightbackground="#262C36", highlightthickness=1)
-        obs.pack(fill="x", pady=(4, 0))
+        obs = tk.Frame(ab, bg=CARD, highlightbackground="#262C36", highlightthickness=1)
+        obs.pack(fill="x", pady=(12, 0))
         inner = tk.Frame(obs, bg=CARD)
         inner.pack(fill="x", padx=14, pady=12)
         inner.columnconfigure(0, weight=2)
@@ -1454,7 +1920,7 @@ class App(tk.Tk):
         src_hint = self._label(fields, "With Color by profit / loss on, each person's OBS Text source "
                                        "(set on their card, under their separate file) turns green or red "
                                        "from their own amount.", CARD, "#8A93A3", 8)
-        src_hint.configure(wraplength=460, justify="left")
+        src_hint.configure(wraplength=430, justify="left")
         src_hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 8))
         self._label(fields, "Host", CARD).grid(row=3, column=0, sticky="w")
         self._label(fields, "Port", CARD).grid(row=3, column=1, sticky="w", padx=(12, 0))
@@ -1486,41 +1952,121 @@ class App(tk.Tk):
         self.conn_head.bind("<Button-1>", lambda e: self._show_connection(not self.cfg["obs_conn_open"]))
         self.conn_widgets = [w for w in fields.grid_slaves() if int(w.grid_info()["row"]) >= 3]
 
-        self.keep_var = tk.BooleanVar()
-        ttk.Checkbutton(body, text="Keep last amount when no money is shown (menus)",
-                        variable=self.keep_var).pack(anchor="w", pady=(10, 0))
-
-        # Advanced (closed by default): refreshing the friends page
-        self.adv_head = tk.Label(body, text="▸  Advanced", bg=BG, fg=TEXT, cursor="hand2",
-                                 font=("Segoe UI", 10, "bold"), anchor="w")
-        self.adv_head.pack(anchor="w", pady=(14, 0))
-        self.adv_head.bind("<Button-1>", lambda e: self._show_advanced(not self.adv_open))
-        AB = "#11151C"
-        self.adv_body = tk.Frame(body, bg=AB, highlightbackground="#232A35", highlightthickness=1)
-        ab = tk.Frame(self.adv_body, bg=AB)
-        ab.pack(fill="x", padx=12, pady=10)
-        # +$3,740 or + $3,740 — the buttons show both, so no label
-        self.space_var = tk.BooleanVar()
-        seg, self.space_btns = self._segmented(
-            ab, ((False, "+$3,740"), (True, "+ $3,740")), self.space_var)
-        seg.pack(anchor="w", pady=(0, 10))
-        rr = tk.Frame(ab, bg=AB)
-        rr.pack(fill="x")
-        self._label(rr, "Refresh friends page", AB, TEXT).pack(side="left")
-        self.refresh_var = tk.IntVar()  # minutes; 0 = off
-        seg, self.refresh_btns = self._segmented(
-            rr, [(v, f"{v} min" if v else "Off") for v in REFRESH_CHOICES], self.refresh_var)
+        # Browser overlays: text size and colour for the money HUD and leaderboard pages
+        self._label(ab, "Browser overlays", AB, TEXT).pack(anchor="w", pady=(14, 0))
+        fr = tk.Frame(ab, bg=AB)
+        fr.pack(fill="x", pady=(6, 0))
+        self._label(fr, "Font", AB).pack(side="left")
+        self.ov_font_var = tk.StringVar()
+        try:
+            installed = sorted({f for f in tkfont.families(self) if not f.startswith("@")} - set(WEB_FONTS),
+                               key=str.lower)
+        except tk.TclError:
+            installed = []
+        self.font_box = ttk.Combobox(fr, textvariable=self.ov_font_var, state="readonly", height=18,
+                                     values=list(WEB_FONTS) + [FONT_SEPARATOR] + installed, width=30)
+        self.font_box.pack(side="left", padx=(12, 0))
+        self.font_box.bind("<<ComboboxSelected>>", lambda e: self._pick_font())
+        self.font_note = self._label(fr, "", AB, "#8A93A3", 8)
+        self.font_note.pack(side="left", padx=(8, 0))
+        sr = tk.Frame(ab, bg=AB)
+        sr.pack(fill="x", pady=(8, 0))
+        self._label(sr, "Text size", AB).pack(side="left")
+        self.ov_size_var = tk.IntVar()
+        step = tk.Frame(sr, bg=BORDER)
+        step.pack(side="left", padx=(12, 0))
+        self.size_minus = tk.Label(step, text="−", font=("Segoe UI", 10), padx=10, pady=4, cursor="hand2")
+        self.size_num = tk.Label(step, font=("Segoe UI", 10), width=3, pady=4, bg=BG_DARK, fg=TEXT)
+        self.size_plus = tk.Label(step, text="+", font=("Segoe UI", 10), padx=10, pady=4, cursor="hand2")
+        for w_ in (self.size_minus, self.size_num, self.size_plus):
+            w_.pack(side="left", padx=1, pady=1)
+        self.size_minus.bind("<Button-1>", lambda e: self._step_size(-1))
+        self.size_plus.bind("<Button-1>", lambda e: self._step_size(1))
+        self.size_reset = self._label(sr, "", AB, "#8A93A3", 8)
+        self.size_reset.pack(side="left", padx=(8, 0))
+        self.size_reset.bind("<Button-1>", lambda e: self.ov_size_var.set(DEFAULTS["overlay_size"]))
+        self.ov_size_var.trace_add("write", lambda *_: self._paint_size())
+        cr2 = tk.Frame(ab, bg=AB)
+        cr2.pack(fill="x", pady=(8, 0))
+        self._label(cr2, "Text color", AB).pack(side="left")
+        self.ov_color_btn = self._small_color_button(cr2, "overlay_color")
+        self.ov_color_btn.pack(side="left", padx=(12, 0))
+        pr = tk.Frame(ab, bg=AB)
+        pr.pack(fill="x", pady=(8, 0))
+        self._label(pr, "Color by profit / loss", AB).pack(side="left")
+        self.ov_pl_var = tk.BooleanVar()
+        self.ov_pl_board_var = tk.BooleanVar()
+        Chip(pr, "$", "Money HUD", self.ov_pl_var).pack(side="left", padx=(12, 0))
+        Chip(pr, "🏆", "Leaderboard", self.ov_pl_board_var).pack(side="left", padx=(8, 0))
+        pc = tk.Frame(ab, bg=AB)
+        pc.pack(fill="x", pady=(6, 0))
+        self.ov_profit_btn = self._small_color_button(pc, "overlay_profit_color")
+        self.ov_profit_btn.pack(side="left")
+        self.ov_loss_btn = self._small_color_button(pc, "overlay_loss_color")
+        self.ov_loss_btn.pack(side="left", padx=(8, 0))
+        # background: a colour at some opacity, or your own picture
+        bgr = tk.Frame(ab, bg=AB)
+        bgr.pack(fill="x", pady=(10, 0))
+        self._label(bgr, "Background", AB).pack(side="left")
+        self.ov_bg_mode_var = tk.StringVar()
+        seg, self.bg_mode_btns = self._segmented(bgr, (("color", "Color"), ("image", "Image")), self.ov_bg_mode_var)
         seg.pack(side="left", padx=(12, 0))
-        warn = self._label(ab, "Off is best — the page updates live. Only pick a time if the number "
-                               "stops updating; refreshing often can get you rate limited by Steam.",
-                           AB, "#E0A458", 8)
-        warn.configure(wraplength=470, justify="left")
-        warn.pack(anchor="w", pady=(6, 0))
+        self.ov_bg_btn = self._small_color_button(bgr, "overlay_bg_color")
+        self.ov_bg_btn.pack(side="left", padx=(8, 0))
+        self.bg_image_row = tk.Frame(ab, bg=AB)
+        self.bg_image_name = self._label(self.bg_image_row, "", AB, LABEL, 9)
+        self.bg_image_name.pack(side="left", fill="x", expand=True)
+        ttk.Button(self.bg_image_row, text="Choose image…", command=self._browse_bg).pack(side="right")
+        self._bg_image_after = bgr
+        opr = tk.Frame(ab, bg=AB)
+        opr.pack(fill="x", pady=(8, 0))
+        self._opacity_row = opr
+        self._label(opr, "Opacity", AB).pack(side="left")
+        self.ov_opacity_var = tk.IntVar()
+        self._stepper(opr, self.ov_opacity_var, 0, 100, 5, AB, unit="%").pack(side="left", padx=(12, 0))
+        # box size: Auto fits the text
+        bxr = tk.Frame(ab, bg=AB)
+        bxr.pack(fill="x", pady=(10, 0))
+        self._label(bxr, "Money HUD box", AB).pack(side="left")
+        self.ov_hud_w_var, self.ov_hud_h_var, self.ov_board_w_var = tk.IntVar(), tk.IntVar(), tk.IntVar()
+        self._label(bxr, "W", AB, "#8A93A3", 9).pack(side="left", padx=(12, 4))
+        self._stepper(bxr, self.ov_hud_w_var, 20, BOX_MAX, 10, AB, auto=True).pack(side="left")
+        self._label(bxr, "H", AB, "#8A93A3", 9).pack(side="left", padx=(10, 4))
+        self._stepper(bxr, self.ov_hud_h_var, 10, BOX_MAX, 1, AB, auto=True).pack(side="left")
+        lbr = tk.Frame(ab, bg=AB)
+        lbr.pack(fill="x", pady=(8, 0))
+        self._label(lbr, "Leaderboard box", AB).pack(side="left")
+        self._label(lbr, "W", AB, "#8A93A3", 9).pack(side="left", padx=(12, 4))
+        self._stepper(lbr, self.ov_board_w_var, 100, BOX_MAX, 10, AB, auto=True).pack(side="left")
+        self._label(lbr, "(height follows the rows)", AB, "#8A93A3", 8).pack(side="left", padx=(10, 0))
+        # OBS: size the Browser sources to fit
+        ofr = tk.Frame(ab, bg=AB)
+        ofr.pack(fill="x", pady=(10, 0))
+        self._label(ofr, "Size OBS sources to fit", AB).pack(side="left")
+        self.obs_fit_var = tk.BooleanVar()
+        Switch(ofr, self.obs_fit_var, bg=AB).pack(side="right")
+        ofb = tk.Frame(ab, bg=AB)
+        ofb.pack(fill="x", pady=(6, 0))
+        self.obs_fit_info = self._label(ofb, "", AB, "#8A93A3", 8)
+        self.obs_fit_info.configure(wraplength=330, justify="left")
+        self.obs_fit_info.pack(side="left", fill="x", expand=True)
+        ttk.Button(ofb, text="Resize in OBS now", command=lambda: self._fit_obs(True)).pack(side="right")
+        ov_hint = self._label(ab, "For the 📺 overlays in OBS (money HUD and leaderboard); changes show "
+                                  "within a moment. Color by profit / loss: pick which overlays get the Profit / "
+                                  "Loss colours — names and $0 stay the text colour.",
+                              AB, "#8A93A3", 8)
+        ov_hint.configure(wraplength=470, justify="left")
+        ov_hint.pack(anchor="w", pady=(6, 0))
         self.adv_open = False
 
         # any setting change -> save + apply live
-        for v in (self.board_on_var, self.board_file_var, self.order_var, self.ranks_var,
+        for v in (self.board_on_var, self.board_overlay_var, self.board_top_var, self.board_top_n_var,
+                  self.board_first_var,
+                  self.board_file_var, self.order_var, self.ranks_var,
                   self.board_names_var, self.space_var, self.refresh_var, self.color_on_var,
+                  self.tray_var, self.ov_font_var, self.ov_size_var, self.ov_pl_var, self.ov_pl_board_var, self.ov_bg_mode_var,
+                  self.ov_opacity_var, self.ov_hud_w_var, self.ov_hud_h_var, self.ov_board_w_var,
+                  self.obs_fit_var,
                   self.keep_var, self.obs_host_var,
                   self.obs_port_var, self.obs_pass_var):
             v.trace_add("write", lambda *_: self._sync_cfg())
@@ -1549,6 +2095,190 @@ class App(tk.Tk):
         paint()
         return seg, btns
 
+    def _stepper(self, parent, var, lo, hi, step, bg, auto=False, unit=""):
+        """− N +, tied to an IntVar. Hold a button to keep stepping. With auto,
+        0 shows "Auto" (stepping below lo goes there, + from Auto starts at lo)."""
+        f = tk.Frame(parent, bg=BORDER)
+        minus = tk.Label(f, text="−", font=("Segoe UI", 10), padx=8, pady=3, cursor="hand2")
+        num = tk.Label(f, font=("Segoe UI", 10), width=5, pady=3, bg=BG_DARK, fg=TEXT)
+        plus = tk.Label(f, text="+", font=("Segoe UI", 10), padx=8, pady=3, cursor="hand2")
+        for w_ in (minus, num, plus):
+            w_.pack(side="left", padx=1, pady=1)
+
+        def get():
+            try:
+                return int(var.get())
+            except (tk.TclError, ValueError):
+                return 0 if auto else lo
+
+        def move(d):
+            n = get()
+            if auto and n == 0:
+                n = lo if d > 0 else 0
+            else:
+                n += d * step
+                n = 0 if auto and n < lo else max(lo, min(n, hi))
+            var.set(n)
+
+        def paint(*_):
+            n = get()
+            num.configure(text="Auto" if auto and n == 0 else f"{n}{unit}")
+            minus.configure(bg=BG_DARK, fg=ACCENT if (n > (0 if auto else lo)) else "#4A5262")
+            plus.configure(bg=BG_DARK, fg=ACCENT if n < hi else "#4A5262")
+
+        for b, d in ((minus, -1), (plus, 1)):
+            state = {}
+
+            def press(e, d=d, state=state):
+                move(d)
+                def again(delay):
+                    move(d)
+                    state["job"] = f.after(delay, again, 40)
+                state["job"] = f.after(400, again, 60)
+
+            def release(e, state=state):
+                if state.get("job"):
+                    f.after_cancel(state.pop("job"))
+            b.bind("<ButtonPress-1>", press)
+            b.bind("<ButtonRelease-1>", release)
+            b.bind("<Leave>", release)
+        var.trace_add("write", paint)
+        f.after_idle(paint)
+        f.step = move  # for tests
+        return f
+
+    def _browse_bg(self):
+        path = filedialog.askopenfilename(
+            title="Background picture for the browser overlays",
+            filetypes=[("Pictures", " ".join("*" + e for e in ICON_TYPES)), ("All files", "*.*")])
+        self._bg_asking = False
+        if path:
+            self.cfg["overlay_bg_image"] = path
+            save_settings(self.cfg)
+        elif not self.cfg["overlay_bg_image"]:
+            self.ov_bg_mode_var.set("color")  # cancelled with nothing chosen: back to a colour
+        self._paint_bg()
+
+    def _paint_bg(self):
+        c = self.cfg
+        image = c["overlay_bg_mode"] == "image"
+        if image:
+            pic = c["overlay_bg_image"]
+            self.bg_image_name.configure(text=os.path.basename(pic) if pic else "No image chosen",
+                                         fg=LABEL if pic else "#FACC15")
+            self.bg_image_row.pack(fill="x", pady=(6, 0), after=self._bg_image_after)
+            self.ov_bg_btn.pack_forget()
+        else:
+            self.bg_image_row.pack_forget()
+            if not self.ov_bg_btn.winfo_ismapped():
+                self.ov_bg_btn.pack(side="left", padx=(8, 0))
+        self._refit_soon()
+
+    def _paint_fit(self):
+        c = self.cfg
+        sizes = obs_fit_sizes(c)
+        hud, board = sizes[HUD_NAME], sizes[BOARD_NAME]
+        text = f"Money HUD {hud[0]} × {hud[1]}  ·  Leaderboard {board[0]} × {board[1]}"
+        if c["obs_fit"] and not c["obs_connect"]:
+            text += "\nOBS is disconnected — press Connect in OBS WebSocket."
+        elif c["obs_fit"]:
+            text += "\nKept in step automatically while OBS is connected."
+        self.obs_fit_info.configure(text=text)
+
+    def _fit_obs_soon(self):
+        """Resize the OBS sources shortly after the last change (not on every click)."""
+        if getattr(self, "_fit_job", None):
+            self.after_cancel(self._fit_job)
+        self._fit_job = self.after(900, self._fit_obs)
+
+    def _fit_obs(self, asked=False):
+        """Set every OBS Browser source showing one of our pages to its fitting
+        size. asked: from the button, so say what happened even if nothing changed."""
+        self._fit_job = None
+        c = self.cfg
+        if not asked and not (c["obs_fit"] and c["obs_connect"]):
+            return
+        sizes, last = obs_fit_sizes(c), getattr(self, "_fit_done", None)
+        if not asked and sizes == last:
+            return
+        cfg = copy.deepcopy(c)
+
+        def say(msg, color):
+            self.events.put(("log", time.strftime("%H:%M:%S"), msg, color))
+
+        def run():
+            try:
+                cl = obs_client(cfg)
+            except Exception as e:
+                say(f"OBS: couldn't connect to resize the browser sources — {e}", "#FF8A7A")
+                return
+            try:
+                found = obs_browser_sources(cl)
+                for name, page in found:
+                    w, h = sizes[page]
+                    cl.set_input_settings(name, {"width": w, "height": h}, True)
+            except Exception as e:
+                say(f"OBS: resizing the browser sources failed — {e}", "#FF8A7A")
+                return
+            finally:
+                try:
+                    cl.disconnect()
+                except Exception:
+                    pass
+            self._fit_done = sizes
+            if found:
+                say("OBS: sized " + ", ".join(f'"{n}" {sizes[pg][0]}×{sizes[pg][1]}' for n, pg in found),
+                    "#5FE39B")
+            else:
+                say("OBS: no Browser source showing money_hud.html or leaderboard.html — add one "
+                    "with the Overlay link first.", "#FACC15")
+        threading.Thread(target=run, daemon=True).start()
+
+    def _small_color_button(self, parent, key):
+        return tk.Button(parent, relief="flat", bd=0, cursor="hand2", font=("Segoe UI", 9, "bold"),
+                         padx=10, pady=4, command=lambda: self._pick_color(key))
+
+    def _paint_overlay_colors(self):
+        c = self.cfg
+        self.ov_bg_btn.configure(text=f"{c['overlay_bg_color'].upper()}", bg=BG_DARK,
+                                 fg=c["overlay_bg_color"] if c["overlay_bg_color"].upper() != "#000000" else LABEL,
+                                 activebackground=BG_DARK, highlightbackground=BORDER, highlightthickness=1)
+        for btn, key, label in ((self.ov_color_btn, "overlay_color", "Text"),
+                                (self.ov_profit_btn, "overlay_profit_color", "+ Profit"),
+                                (self.ov_loss_btn, "overlay_loss_color", "− Loss")):
+            on = key == "overlay_color" or c["overlay_pl"] or c["overlay_pl_board"]
+            fg = c[key] if on else "#4A5262"   # profit / loss dimmed while off (still clickable)
+            btn.configure(text=f"{label}   {c[key].upper()}", bg=BG_DARK, fg=fg,
+                          activebackground=BG_DARK, activeforeground=fg,
+                          highlightbackground=BORDER, highlightthickness=1)
+
+    def _pick_font(self):
+        if self.ov_font_var.get() == FONT_SEPARATOR:  # the divider isn't a font
+            self.ov_font_var.set(self.cfg["overlay_font"])
+        self._paint_font()
+
+    def _paint_font(self):
+        f = self.ov_font_var.get()
+        self.font_note.configure(text="game font" if f == "Barlow" else
+                                 "from Google Fonts" if f in WEB_FONTS else "installed font")
+
+    def _step_size(self, d):
+        n = self.ov_size_var.get() + d
+        self.ov_size_var.set(max(OVERLAY_SIZE_MIN, min(n, OVERLAY_SIZE_MAX)))
+
+    def _paint_size(self):
+        try:
+            n = self.ov_size_var.get()
+        except tk.TclError:
+            return
+        self.size_num.configure(text=str(n))
+        for b, ok in ((self.size_minus, n > OVERLAY_SIZE_MIN), (self.size_plus, n < OVERLAY_SIZE_MAX)):
+            b.configure(bg=BG_DARK, fg=ACCENT if ok else "#4A5262")
+        default = n == DEFAULTS["overlay_size"]
+        self.size_reset.configure(text="px  (game size)" if default else "px  ·  reset",
+                                  cursor="" if default else "hand2",
+                                  fg="#8A93A3" if default else ACCENT)
+
     def _color_button(self, parent, label, key):
         b = tk.Button(parent, text=label, relief="flat", bd=0, cursor="hand2",
                       font=("Segoe UI", 10, "bold"), padx=10, pady=10,
@@ -1575,7 +2305,26 @@ class App(tk.Tk):
         self.order_var.set(c["board_order"])
         self.ranks_var.set(bool(c["board_ranks"]))
         self.board_names_var.set(bool(c["board_names"]))
+        self.board_overlay_var.set(bool(c["board_overlay"]))
+        self.board_top_n_var.set(min(c["board_top"] or c["board_top_n"], BOARD_TOP_MAX))
+        self.board_top_var.set("top" if c["board_top"] > 0 else "all")
+        self.board_first_var.set(c["board_first"])
         self.space_var.set(bool(c["space"]))
+        self.tray_var.set(bool(c["tray"]))
+        self.ov_font_var.set(c["overlay_font"])
+        self._paint_font()
+        self.ov_size_var.set(c["overlay_size"])
+        self.ov_pl_var.set(bool(c["overlay_pl"]))
+        self.ov_pl_board_var.set(bool(c["overlay_pl_board"]))
+        self.ov_bg_mode_var.set(c["overlay_bg_mode"])
+        self.ov_opacity_var.set(c["overlay_bg_opacity"])
+        self.ov_hud_w_var.set(c["overlay_hud_w"])
+        self.ov_hud_h_var.set(c["overlay_hud_h"])
+        self.ov_board_w_var.set(c["overlay_board_w"])
+        self.obs_fit_var.set(bool(c["obs_fit"]))
+        self._paint_overlay_colors()
+        self._paint_bg()
+        self._paint_fit()
         self.refresh_var.set(refresh_choice(c["reload_on"], c["reload_minutes"]))
         self.color_on_var.set(bool(c["color_on"]))
         self.keep_var.set(bool(c["keep_last"]))
@@ -1587,8 +2336,8 @@ class App(tk.Tk):
         self._paint_connect()
         self._paint_board()
         self._show_connection(c["obs_conn_open"], save=False)
-        # Advanced stays closed unless a refresh is switched on, so it's never hidden
-        self._show_advanced(bool(c["reload_on"]))
+        # Advanced opens as you left it (and always while a refresh is switched on)
+        self._show_advanced(bool(c["adv_open"] or c["reload_on"]), save=False)
         self._build_people()
 
     # ---- people ----
@@ -1639,6 +2388,18 @@ class App(tk.Tk):
             on_board = tk.BooleanVar(value=p["board"])
             Chip(chips, "📄", "Separate file", own).pack(side="left")
             Chip(chips, "🏆", "Leaderboard", on_board).pack(side="left", padx=(8, 0))
+            ov = tk.BooleanVar(value=p["overlay"])
+            Chip(chips, "📺", "Overlay", ov).pack(side="left", padx=(8, 0))
+            # when Overlay is on: their link, click to copy
+            lr = tk.Frame(row, bg=CARD)
+            self._label(lr, "Overlay link", CARD, LABEL, 9).pack(side="left")
+            link = tk.Label(lr, text=self._short_link(i), bg=CARD, fg=ACCENT, cursor="hand2",
+                            font=("Segoe UI", 9, "underline"), anchor="w")
+            link.pack(side="left", padx=(8, 0))
+            link.bind("<Button-1>", lambda e, i=i, l=link: self._copy_overlay_link(i, l))
+            if p["overlay"]:
+                lr.pack(fill="x", pady=(6, 0))
+            ov.trace_add("write", lambda *_, i=i, v=ov, f=lr, c=chips: self._set_overlay(i, v.get(), f, c))
             # their own file block: the file, and (with OBS color on) their OBS source
             ff = tk.Frame(row, bg=CARD)
             fl = tk.Frame(ff, bg=CARD)
@@ -1665,7 +2426,7 @@ class App(tk.Tk):
             on_board.trace_add("write", lambda *_, i=i, v=on_board: self._set_person(i, board=bool(v.get())))
             self.person_rows.append({"btn": btn, "mode": mode, "label": label, "file": fvar,
                                      "own": own, "board": on_board, "fname": fname, "src": src,
-                                     "rm": rm})
+                                     "overlay": ov, "rm": rm})
         self._paint_people()
         self._refit_soon()
 
@@ -1683,6 +2444,19 @@ class App(tk.Tk):
             self.board_body.pack(fill="x")
         else:
             self.board_body.pack_forget()
+        if self.cfg["board_overlay"]:
+            self.board_link_row.pack(fill="x", pady=(6, 0), after=self._board_link_after)
+        else:
+            self.board_link_row.pack_forget()
+        if self.cfg["board_first"] == "image":
+            icon = self.cfg["board_icon"]
+            self.icon_name.configure(text=os.path.basename(icon) if icon else "No image chosen — the crown "
+                                     "is used until you choose one", fg=LABEL if icon else "#FACC15")
+            self.icon_row.pack(fill="x", pady=(6, 0))
+        else:
+            self.icon_row.pack_forget()
+        if getattr(self, "overlay_board", None) is not None:
+            self._update_overlay_server()
         self._refit_soon()
 
     def _show_connection(self, open_it, save=True):
@@ -1698,14 +2472,47 @@ class App(tk.Tk):
             save_settings(self.cfg)
         self._refit_soon()
 
-    def _show_advanced(self, open_it):
+    def _show_advanced(self, open_it, save=True):
         self.adv_open = open_it
+        if save and self.cfg.get("adv_open") != bool(open_it):
+            self.cfg["adv_open"] = bool(open_it)
+            save_settings(self.cfg)
         self.adv_head.configure(text=("▾" if open_it else "▸") + "  Advanced")
         if open_it:
             self.adv_body.pack(fill="x", pady=(6, 0), after=self.adv_head)
         else:
             self.adv_body.pack_forget()
         self._refit_soon()
+
+    def _step_top(self, d):
+        """− / +: change how many, and switch to Top if All was chosen."""
+        if self.board_top_var.get() != "top":
+            self.board_top_var.set("top")
+        else:
+            n = self.board_top_n_var.get() + d
+            self.board_top_n_var.set(max(1, min(n, BOARD_TOP_MAX)))
+
+    def _paint_top(self):
+        try:
+            on, n = self.board_top_var.get() == "top", self.board_top_n_var.get()
+        except tk.TclError:
+            return
+        self.top_num.configure(text=str(n), bg=BG_DARK, fg=TEXT if on else "#4A5262")
+        for b, ok in ((self.top_minus, n > 1), (self.top_plus, n < BOARD_TOP_MAX)):
+            b.configure(bg=BG_DARK, fg=(ACCENT if ok else "#4A5262") if on else "#4A5262")
+        self.top_people.configure(text=("person" if n == 1 else "people") if on else "everyone")
+
+    def _browse_icon(self):
+        path = filedialog.askopenfilename(
+            title="1st place picture for the leaderboard overlay",
+            filetypes=[("Pictures", " ".join("*" + e for e in ICON_TYPES)), ("All files", "*.*")])
+        self._icon_asking = False
+        if path:
+            self.cfg["board_icon"] = path
+            save_settings(self.cfg)
+        elif not self.cfg["board_icon"]:
+            self.board_first_var.set("crown")  # cancelled with nothing chosen: back to the crown
+        self._paint_board()
 
     def _browse_board(self):
         path = filedialog.asksaveasfilename(title="Leaderboard text file", defaultextension=".txt",
@@ -1724,6 +2531,9 @@ class App(tk.Tk):
             return
         self.cfg["people"][i].update(changes)
         save_settings(self.cfg)
+        if "board" in changes:   # the leaderboard's fitting height changes
+            self._paint_fit()
+            self._fit_obs_soon()
 
     def _close_picker_on_move(self, e):
         if e.widget is self and self.picker is not None:
@@ -1806,11 +2616,51 @@ class App(tk.Tk):
             c["reload_minutes"] = minutes
         # the tracker rewrites the file(s) with these within a couple of seconds
         c["space"] = bool(self.space_var.get())
+        c["tray"] = bool(self.tray_var.get())
+        font = self.ov_font_var.get().strip()
+        if font and font != FONT_SEPARATOR:
+            c["overlay_font"] = font
+        try:
+            c["overlay_size"] = max(OVERLAY_SIZE_MIN, min(int(self.ov_size_var.get()), OVERLAY_SIZE_MAX))
+        except (tk.TclError, ValueError):
+            pass
+        c["overlay_pl"] = bool(self.ov_pl_var.get())
+        c["overlay_pl_board"] = bool(self.ov_pl_board_var.get())
+        for key, var, hi in (("overlay_bg_opacity", self.ov_opacity_var, 100),
+                             ("overlay_hud_w", self.ov_hud_w_var, BOX_MAX),
+                             ("overlay_hud_h", self.ov_hud_h_var, BOX_MAX),
+                             ("overlay_board_w", self.ov_board_w_var, BOX_MAX)):
+            try:
+                c[key] = max(0, min(int(var.get()), hi))
+            except (tk.TclError, ValueError):
+                pass
+        mode = self.ov_bg_mode_var.get()
+        c["overlay_bg_mode"] = mode if mode in ("color", "image") else "color"
+        if mode == "image" and not c["overlay_bg_image"] and not getattr(self, "_bg_asking", False):
+            self._bg_asking = True
+            self.after_idle(self._browse_bg)  # Image with no picture yet: pick one
+        fit_was = c["obs_fit"]
+        c["obs_fit"] = bool(self.obs_fit_var.get())
+        if c["obs_fit"] and not fit_was:
+            self._fit_done = None  # just switched on: size them now
+        self._paint_overlay_colors()
+        self._paint_bg()
+        self._paint_fit()
+        self._fit_obs_soon()
         c["board_on"] = bool(self.board_on_var.get())
         c["board_file"] = self.board_file_var.get().strip()
         c["board_order"] = self.order_var.get() if self.order_var.get() in ("amount", "list") else "amount"
         c["board_ranks"] = bool(self.ranks_var.get())
         c["board_names"] = bool(self.board_names_var.get())
+        c["board_overlay"] = bool(self.board_overlay_var.get())
+        n = max(1, min(int(self.board_top_n_var.get() or 5), BOARD_TOP_MAX))
+        c["board_top_n"] = n
+        c["board_top"] = n if self.board_top_var.get() == "top" else 0
+        first = self.board_first_var.get()
+        c["board_first"] = first if first in ("crown", "number", "image") else "crown"
+        if c["board_first"] == "image" and not c["board_icon"] and not getattr(self, "_icon_asking", False):
+            self._icon_asking = True
+            self.after_idle(self._browse_icon)  # Custom with no picture yet: pick one
         self._paint_board()
         was_on = c["color_on"]
         c["color_on"] = bool(self.color_on_var.get())
@@ -1826,8 +2676,25 @@ class App(tk.Tk):
                 self._test_obs()
             self._paint_connect(keep_pill=c["color_on"] and c["obs_connect"] and self._obs_sources())
             self._build_people()  # show / hide each person's OBS source box
-        save_settings(c)
+        self._save_soon()
         self._show_value(self.current_text)
+
+    def _save_soon(self):
+        """Save now, or if a save just happened, once more shortly (so holding
+        − / + doesn't rewrite settings.json many times a second)."""
+        now = time.monotonic()
+        if getattr(self, "_save_job", None):
+            return  # a save is already on its way and will have this change
+        wait = 0.3 - (now - getattr(self, "_saved_at", 0.0))
+        if wait <= 0:
+            self._saved_at = now
+            save_settings(self.cfg)
+        else:
+            def later():
+                self._save_job = None
+                self._saved_at = time.monotonic()
+                save_settings(self.cfg)
+            self._save_job = self.after(int(wait * 1000) + 1, later)
 
     # ---- actions ----
     def _pick_color(self, key):
@@ -1836,6 +2703,7 @@ class App(tk.Tk):
             self.cfg[key] = hx.upper()
             save_settings(self.cfg)
             self._paint_color_buttons()
+            self._paint_overlay_colors()
             self._show_value(self.current_text)
 
     def _toggle_pass(self):
@@ -1872,6 +2740,8 @@ class App(tk.Tk):
             self._paint_connect(keep_pill=True)
             self._add_log(stamp, "OBS: connecting…", None)
             self._test_obs()  # connect now and say whether it worked
+            self._fit_done = None
+            self._fit_obs_soon()
         else:
             self._paint_connect()
             self._add_log(stamp, "OBS: disconnected — press Connect to use it again.", "#FACC15")
@@ -1980,7 +2850,142 @@ class App(tk.Tk):
                 self.start(force_login=True)
         wait_then_start()
 
+    # ---- start with Windows ----
+    def _set_startup(self):
+        on = bool(self.startup_var.get())
+        if on == bool(startup_entry()):
+            return
+        try:
+            set_startup(on)
+        except OSError as e:
+            self._add_log(time.strftime("%H:%M:%S"), f"Couldn't change Start with Windows: {e}", "#FF8A7A")
+            self.after_idle(lambda: self.startup_var.set(bool(startup_entry())))
+            return
+        self._add_log(time.strftime("%H:%M:%S"),
+                      "Starts with Windows from now on." if on else "Won't start with Windows any more.",
+                      "#5FE39B" if on else None)
+
+    def _fix_startup_path(self):
+        """The exe was moved since Start with Windows was switched on: point
+        the entry at where it is now."""
+        if not getattr(sys, "frozen", False):
+            return  # running the .py: leave the exe's entry alone
+        entry = startup_entry()
+        if entry and entry != startup_command():
+            try:
+                set_startup(True)
+            except OSError:
+                pass
+
+    # ---- tray ----
+    def _maybe_to_tray(self, e):
+        if e.widget is self and self.cfg.get("tray") and self.state() == "iconic":
+            self.after(0, self._hide_to_tray)
+
+    def _hide_to_tray(self):
+        """Hide the window and show the tray icon. Needs pystray (in the exe);
+        without it the window just stays minimised."""
+        if self.tray is not None:
+            return
+        try:
+            import pystray
+            post = lambda what: self.events.put(("tray", what))
+            running = lambda item: bool(self.worker and self.worker.is_alive())
+            menu = pystray.Menu(
+                pystray.MenuItem("Show", lambda: post("show"), default=True),
+                pystray.MenuItem(lambda item: "Stop tracking" if running(item) else "Start tracking",
+                                 lambda: post("toggle")),
+                pystray.MenuItem("Quit", lambda: post("quit")))
+            self.tray = pystray.Icon("wardogs_profit_tracker", tray_image(), APP_NAME, menu)
+            self.tray.run_detached()
+        except Exception as e:
+            self.tray = None
+            self._add_log(time.strftime("%H:%M:%S"), f"Couldn't make a tray icon ({e}) — "
+                                                     "the window stays minimised instead.", "#FACC15")
+            return
+        self.withdraw()
+
+    def _show_from_tray(self):
+        if self.tray is not None:
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+            self.tray = None
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.focus_force()
+
+    def _short_link(self, i):
+        """What the link looks like on the card (the full one is copied)."""
+        return f"…/overlay/{HUD_NAME}?person={i + 1}"
+
+    def _copy_overlay_link(self, i, label=None):
+        link = overlay_link(self.hud_path, i + 1)
+        self.clipboard_clear()
+        self.clipboard_append(link)
+        who = self.cfg["people"][i]["who"] or "you"
+        self._add_log(time.strftime("%H:%M:%S"),
+                      f"Copied the overlay link for {who} — in OBS add a Browser source, untick "
+                      f"Local file and paste it as the URL: {link}", "#5FE39B")
+        if label is not None:
+            # show it worked, then put the link back
+            label.configure(text="✓ Copied — paste it as an OBS Browser source URL", fg="#5FE39B")
+            self.after(2000, lambda: label.winfo_exists() and
+                       label.configure(text=self._short_link(i), fg=ACCENT))
+
+    def _copy_board_link(self):
+        link = overlay_link(self.board_path)
+        self.clipboard_clear()
+        self.clipboard_append(link)
+        self._add_log(time.strftime("%H:%M:%S"),
+                      f"Copied the leaderboard overlay link — in OBS add a Browser source, untick "
+                      f"Local file and paste it as the URL: {link}", "#5FE39B")
+        self.board_link.configure(text="✓ Copied — paste it as an OBS Browser source URL", fg="#5FE39B")
+        self.after(2000, lambda: self.board_link.winfo_exists() and
+                   self.board_link.configure(text=f"…/overlay/{BOARD_NAME}", fg=ACCENT))
+
+    def _set_overlay(self, i, on, link_row, chips):
+        self._set_person(i, overlay=bool(on))
+        if on:
+            link_row.pack(fill="x", pady=(6, 0), after=chips)
+        else:
+            link_row.pack_forget()
+        self._update_overlay_server()
+        self._refit_soon()
+
+    def _update_overlay_server(self):
+        """Run the number feed only while someone has Overlay on."""
+        wanted = (any(p.get("overlay") for p in self.cfg["people"])
+                  or (self.cfg["board_on"] and self.cfg["board_overlay"]))
+        if wanted and self.overlay is None:
+            try:
+                self.overlay = OverlayServer(int(self.cfg["overlay_port"]), lambda: self.overlay_texts,
+                                             lambda: self.overlay_board,
+                                             lambda: {"icon": self.cfg["board_icon"],
+                                                      "bg": self.cfg["overlay_bg_image"]},
+                                             lambda page: overlay_style(self.cfg, page))
+            except OSError as e:
+                self.events.put(("log", time.strftime("%H:%M:%S"),
+                                 f"Overlay feed couldn't start on port {self.cfg['overlay_port']} "
+                                 f"({e}) — is another program using it?", "#FACC15"))
+        elif not wanted and self.overlay is not None:
+            self.overlay.close()
+            self.overlay = None
+
     def _close(self):
+        if getattr(self, "_save_job", None):
+            self.after_cancel(self._save_job)  # saved below anyway
+            self._save_job = None
+        if getattr(self, "overlay", None) is not None:
+            self.overlay.close()
+        if self.tray is not None:
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+            self.tray = None
         self.stop()
         save_settings(self.cfg)
         # hide now, but give the worker a few seconds to close the browser
@@ -2107,6 +3112,15 @@ class App(tk.Tk):
                         self._paint_people()
                         if self.picker is not None:
                             self.picker.repaint_avatars()
+                elif kind == "tray":
+                    if ev[1] == "show":
+                        self._show_from_tray()
+                    elif ev[1] == "toggle":
+                        self._toggle_run()
+                        if self.tray is not None:
+                            self.tray.update_menu()
+                    elif ev[1] == "quit":
+                        self._close()
                 elif kind == "stopped":
                     if ev[1] is not self.worker:
                         continue  # an older run finishing after a new one started
@@ -2120,6 +3134,8 @@ class App(tk.Tk):
         self.after(150, self._pump)
 
     def _tick(self):
+        if show_signal_set(self._show_signal):
+            self._show_from_tray()
         if self.last_refresh and self.worker and self.worker.is_alive() \
                 and self.status_lbl.cget("text").startswith("Signed in"):
             secs = int(time.time() - self.last_refresh)
@@ -2195,11 +3211,95 @@ def disable_power_throttling():
         pass  # older Windows: nothing to turn off
 
 
+SHOW_EVENT = "Local\\WardogsProfitTracker_Show"
+
+
+# ---------------- start with Windows ----------------
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+STARTUP_NAME = APP_NAME          # the value's name under RUN_KEY
+STARTUP_ARG = "--startup"        # how the app knows Windows started it
+
+
+def startup_command():
+    """What Windows runs at sign-in: this exe (or pythonw + this script)."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" {STARTUP_ARG}'
+    exe = sys.executable
+    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    return f'"{pyw if os.path.exists(pyw) else exe}" "{os.path.abspath(__file__)}" {STARTUP_ARG}'
+
+
+def startup_entry():
+    """The command registered to run at sign-in, or "" when there's none."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            return str(winreg.QueryValueEx(k, STARTUP_NAME)[0])
+    except (OSError, ImportError):
+        return ""
+
+
+def set_startup(on):
+    """Add or remove the sign-in entry (this user only, no admin needed)."""
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        if on:
+            winreg.SetValueEx(k, STARTUP_NAME, 0, winreg.REG_SZ, startup_command())
+        else:
+            try:
+                winreg.DeleteValue(k, STARTUP_NAME)
+            except FileNotFoundError:
+                pass
+
+
+def make_show_signal():
+    """A named Windows event a second copy of the exe sets to say "show the
+    window" (works even while it's hidden in the tray)."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateEventW.restype = wintypes.HANDLE
+        k32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+        return k32.CreateEventW(None, False, False, SHOW_EVENT)  # auto-reset, not set
+    except Exception:
+        return None
+
+
+def show_signal_set(handle):
+    """True once each time a second copy asked to show the window."""
+    if not handle:
+        return False
+    global _WAIT
+    if _WAIT is None:
+        import ctypes
+        from ctypes import wintypes
+        _WAIT = ctypes.WinDLL("kernel32", use_last_error=True).WaitForSingleObject
+        _WAIT.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    return _WAIT(handle, 0) == 0  # WAIT_OBJECT_0
+
+
+_WAIT = None
+
+
 def focus_existing_window():
-    """Brings the already-open window to the front."""
+    """Brings the already-open window to the front (also out of the tray)."""
     if os.name != "nt":
         return False
     import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenEventW.restype = wintypes.HANDLE
+    k32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    EVENT_MODIFY_STATE = 0x0002
+    ev = k32.OpenEventW(EVENT_MODIFY_STATE, False, SHOW_EVENT)
+    if ev:
+        k32.SetEvent(wintypes.HANDLE(ev))  # the running copy shows itself within a second
+        k32.CloseHandle(wintypes.HANDLE(ev))
+        return True
     u32 = ctypes.windll.user32
     hwnd = u32.FindWindowW(None, APP_NAME)
     if not hwnd:
@@ -2220,4 +3320,9 @@ if __name__ == "__main__":
         sys.exit(0)
     disable_power_throttling()
     trim_log_file()
-    App().mainloop()
+    app = App()
+    app._fix_startup_path()
+    if STARTUP_ARG in sys.argv[1:]:
+        # started by Windows at sign-in: out of the way (tracking starts as usual)
+        app.after(300, app._hide_to_tray if app.cfg.get("tray") else app.iconify)
+    app.mainloop()

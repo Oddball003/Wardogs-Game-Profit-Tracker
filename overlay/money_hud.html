@@ -1,0 +1,241 @@
+<!doctype html>
+<!-- wardogs-page-version: 4 (the tracker replaces older copies; keep this line) -->
+<!--
+  Wardogs money HUD — OBS Browser Source overlay.
+
+  Shows one person's live profit in the style of the game's money HUD.
+  The number comes from Wardogs Profit Tracker, which answers on your own PC at
+  http://127.0.0.1:8765/value?person=1 (asked every 100 ms).
+
+  URL options (add after the file name, e.g. money_hud.html?person=2):
+    ?person=N        which person in the tracker's list (1 = first, default)
+    ?plus=1          show "+$" for profit (default: just "$")
+    ?interval=100    how often to ask the tracker, in ms
+    ?server=URL      the tracker's address (default http://127.0.0.1:8765)
+    ?value=$10,000   show a fixed number (for testing; no tracker needed)
+    ?preview=1       sample numbers over a dark background, to check the look
+
+  Text size and colour (and colour by profit / loss) are set in the tracker:
+  Advanced › Browser overlays. Those override --digit-height and --color below.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Wardogs money HUD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&display=block" rel="stylesheet">
+<style>
+  :root {
+    /* ================= LOOK — tweak these ================= */
+    --digit-height: 18px;     /* height of the digits (figure / cap height), not font-size */
+    --font: "Barlow";         /* set in the tracker: Advanced › Browser overlays › Font */
+    --weight: 400;            /* Barlow weight: 400, 500 or 600 */
+    --stroke: 0.2px;          /* extra same-colour outline that thickens the strokes (0px = off).
+                                 400 alone = 2.0 px strokes, 400 + 0.2px = 2.3 px, 500 = 2.55 px */
+    --color: #C5C2BF;         /* text colour (solid) */
+    --tracking: 0.040em;      /* letter spacing: 0.040em = digits 7% further apart than plain
+                                 Barlow (none is added after the last character) */
+    --bg-rgb: 0, 0, 0;        /* box colour (red, green, blue) — black */
+    --box-opacity: 0.45;      /* box behind the number: 0 = invisible, 1 = solid */
+    --box-min-w: 0px;         /* box width at least this (0px: fit the number) */
+    /* the box grows with the digits: at 18px these are 39 / 12 / 11 / -1 px */
+    --box-height: calc(var(--digit-height) * 39 / 18);   /* box height */
+    --pad-left: calc(var(--digit-height) * 12 / 18);     /* box's left edge to the number */
+    --pad-right: calc(var(--digit-height) * 11 / 18);    /* 1px less on the right: the last digit has
+                                 ~1px of its own side space, so this measures 12px to the ink too */
+    --nudge-y: calc(var(--digit-height) * -1 / 18);      /* vertical centring (+ = down, - = up) */
+
+    /* ============ font metric — only change with another font ============ */
+    --figure-ratio: 0.760;    /* Barlow's digit height ÷ font-size (measured) */
+  }
+
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+
+  .box {
+    position: absolute; top: 0; right: 0;        /* anchored on its RIGHT edge: grows to the left */
+    box-sizing: border-box;
+    height: var(--box-height);
+    padding: 0 var(--pad-right) 0 var(--pad-left);
+    background: rgba(var(--bg-rgb), var(--box-opacity));
+    min-width: var(--box-min-w);
+    display: flex; align-items: center; justify-content: flex-end;   /* number on the right */
+    isolation: isolate;
+    border-radius: 0;
+  }
+  .box.empty { display: none; }
+  /* your picture as the background (set in the tracker), faded by --box-opacity */
+  .bgimg .box { background: none; }
+  .bgimg .box::before { content: ""; position: absolute; inset: 0; z-index: -1;
+    background: var(--bg-image) center / cover no-repeat; opacity: var(--box-opacity); }
+
+  .num {
+    font-family: var(--font), "Barlow", sans-serif;
+    font-weight: var(--weight);
+    font-size: calc(var(--digit-height) / var(--figure-ratio));
+    line-height: 1;
+    color: var(--color);
+    -webkit-text-stroke: var(--stroke) var(--color);
+    letter-spacing: var(--tracking);
+    margin-right: calc(-1 * var(--tracking));   /* no spacing after the last character */
+    white-space: nowrap;
+    position: relative; top: var(--nudge-y);
+    font-kerning: normal;
+  }
+
+  /* ---------- ?preview=1 only ---------- */
+  body.preview {
+    overflow: auto;
+    background-color: #1b1e22;
+    background-image:
+      repeating-linear-gradient(45deg, rgba(255,255,255,.035) 0 2px, transparent 2px 7px),
+      repeating-linear-gradient(-45deg, rgba(0,0,0,.25) 0 3px, transparent 3px 11px),
+      radial-gradient(circle at 30% 20%, #3a4048 0%, #1b1e22 60%);
+    font-family: "Segoe UI", system-ui, sans-serif; color: #9aa3b2;
+  }
+  html:has(body.preview) { background: #1b1e22; }
+  body.preview { min-height: 100vh; }
+  .preview .wrap { padding: 28px 16px; }
+  .preview .row { position: relative; width: min(460px, 100%); height: var(--box-height); margin: 0 0 22px; }
+  .preview .row .box { position: absolute; }
+  .preview .label { font-size: 12px; margin: 0 0 6px; }
+</style>
+</head>
+<body>
+<div class="box empty" id="box"><span class="num" id="num"></span></div>
+
+<script>
+  const P = new URLSearchParams(location.search);
+  const SERVER = (P.get("server") || "http://127.0.0.1:8765").replace(/\/+$/, "");
+  const PERSON = P.get("person") || "1";
+  const INTERVAL = Math.max(50, parseInt(P.get("interval") || "100", 10) || 100);
+  const SHOW_PLUS = P.get("plus") === "1";
+
+  // "+$3,740" / "Name: -$6,575" / "-$350" / "1250000" -> "$3,740" / "-$6,575" / "-$350" / "$1,250,000"
+  function format(raw) {
+    const t = String(raw || "").trim();
+    if (!t) return "";
+    let m = t.match(/([+\-−]?)\s*\$\s*([\d,]+(?:\.\d+)?)/);
+    if (!m) m = t.match(/([+\-−]?)\s*(\d[\d,]*(?:\.\d+)?)/);
+    if (!m) return "";
+    let num = m[2];
+    if (!num.includes(",")) {                    // add thousands separators if missing
+      const [i, f] = num.split(".");
+      num = Number(i).toLocaleString("en-US") + (f ? "." + f : "");
+    }
+    const neg = m[1] === "-" || m[1] === "−";
+    return (neg ? "-" : (SHOW_PLUS && m[1] === "+" ? "+" : "")) + "$" + num;
+  }
+
+
+  // the look set in the tracker (Advanced › Browser overlays): text size,
+  // colour, and profit / loss colours. Sent with every answer.
+
+  // the font (Advanced › Browser overlays › Font): a Google font is loaded
+  // from Google Fonts, an installed one is used as it is. Digits are drawn
+  // at --digit-height in any font: its digit height is measured once loaded.
+  let fontKey = "";
+  async function applyFont(st) {
+    const font = (st && st.font) || "Barlow", web = !st || st.webFont !== false;
+    if (font + web === fontKey) return;
+    fontKey = font + web;
+    const root = document.documentElement.style;
+    if (web && font !== "Barlow" && !document.querySelector(`link[data-font="${CSS.escape(font)}"]`)) {
+      const l = document.createElement("link");
+      l.rel = "stylesheet"; l.dataset.font = font;
+      l.href = "https://fonts.googleapis.com/css2?family=" + encodeURIComponent(font).replace(/%20/g, "+")
+             + ":wght@400&display=block";
+      document.head.appendChild(l);
+      await new Promise(res => { l.onload = l.onerror = res; });
+    }
+    root.setProperty("--font", `"${font.replace(/"/g, "")}"`);
+    root.removeProperty("--figure-ratio");          // back to the hand-tuned Barlow value
+    if (font === "Barlow") return;
+    // match Barlow's digits as tuned: measure both, scale the new font to Barlow's height
+    try { await Promise.all([document.fonts.load(`100px "${font}"`, "0123456789$"),
+                             document.fonts.load('100px "Barlow"', "0123456789$")]); } catch (e) {}
+    if (fontKey !== font + web) return;            // changed again meanwhile
+    const c = document.createElement("canvas").getContext("2d");
+    const ink = f => { c.font = `400 100px ${f}`; return c.measureText("0123456789").actualBoundingBoxAscent / 100; };
+    const h = ink(`"${font}", "Barlow"`), barlow = ink('"Barlow"');
+    const tuned = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--figure-ratio")) || 0.76;
+    const ratio = barlow > 0.3 ? h * tuned / barlow : h;
+    if (ratio > 0.3 && ratio < 1.4) root.setProperty("--figure-ratio", ratio.toFixed(3));
+    else root.removeProperty("--figure-ratio");
+  }
+
+  let style = null, styleKey = "";
+  function applyStyle(st) {
+    const key = JSON.stringify(st || null);
+    if (key === styleKey) return false;
+    styleKey = key; style = st || null;
+    applyFont(style);
+    const root = document.documentElement.style;
+    if (style && style.size) root.setProperty("--digit-height", style.size + "px");
+    else root.removeProperty("--digit-height");
+    if (style && style.color) root.setProperty("--color", style.color);
+    else root.removeProperty("--color");
+    // the box behind the text: a colour at some opacity, or your own picture
+    const set = (k, v) => v === null ? root.removeProperty(k) : root.setProperty(k, v);
+    const hex = style && /^#[0-9a-f]{6}$/i.test(style.bg || "") ? style.bg : null;
+    set("--bg-rgb", hex ? [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(", ") : null);
+    set("--box-opacity", style && Number.isFinite(style.opacity) ? String(style.opacity / 100) : null);
+    const img = style && style.image ? `url("${SERVER}/bg?v=${encodeURIComponent(style.image)}")` : null;
+    set("--bg-image", img);
+    document.documentElement.classList.toggle("bgimg", !!img);
+    // box size (0 / missing: fit the text)
+    set("--box-min-w", style && style.hudW > 0 ? style.hudW + "px" : null);
+    set("--box-height", style && style.hudH > 0 ? style.hudH + "px" : null);
+    set("--panel-min-w", style && style.boardW > 0 ? style.boardW + "px" : null);
+    return true;
+  }
+  // an amount's colour: profit / loss when that's on, else the text colour
+  function paintAmount(el, raw) {
+    const t = String(raw || "");
+    const neg = /[-−]\s*\$?\s*\d/.test(t), zero = !/[1-9]/.test(t);
+    if (style && style.pl && !zero) el.style.setProperty("--color", neg ? style.loss : style.profit);
+    else el.style.removeProperty("--color");
+  }
+
+  const box = document.getElementById("box"), num = document.getElementById("num");
+  let shown = null;
+  function show(text, st) {
+    const restyled = applyStyle(st);
+    const s = format(text);
+    if (s === shown && !restyled) return;        // only touch the page when it changes
+    shown = s;
+    paintAmount(num, s);
+    num.textContent = s;
+    box.classList.toggle("empty", !s);           // nothing to show: no box at all
+  }
+
+  if (P.get("preview") === "1") {
+    // sample numbers over a textured background, to check the look in a browser
+    document.body.classList.add("preview");
+    box.remove();
+    const wrap = document.createElement("div");
+    wrap.className = "wrap";
+    for (const v of ["$100", "$10,000", "$1,250,000", "-$350"]) {
+      wrap.insertAdjacentHTML("beforeend",
+        `<p class="label">${v}</p><div class="row"><div class="box"><span class="num">${v}</span></div></div>`);
+    }
+    document.body.appendChild(wrap);
+  } else if (P.has("value")) {
+    show(P.get("value"));                         // fixed number, for testing
+  } else {
+    // live: ask the tracker every INTERVAL ms. If it's closed or restarting,
+    // keep showing the last number and keep trying.
+    let busy = false;
+    setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const r = await fetch(`${SERVER}/value?person=${encodeURIComponent(PERSON)}`, { cache: "no-store" });
+        if (r.ok) { const j = await r.json(); show(j.text, j.style); }
+      } catch (e) { /* tracker not running yet: try again next time */ }
+      busy = false;
+    }, INTERVAL);
+  }
+</script>
+</body>
+</html>

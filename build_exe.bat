@@ -15,7 +15,7 @@ rem close an old copy so it can be replaced
 taskkill /f /im "Wardogs Profit Tracker.exe" >nul 2>nul
 
 echo [1/2] Installing build tools...
-%PY% -m pip install --upgrade playwright obsws-python pillow pyinstaller
+%PY% -m pip install --upgrade playwright obsws-python pillow pystray pyinstaller
 if errorlevel 1 goto fail
 
 echo.
@@ -24,6 +24,9 @@ echo [2/2] Building the exe (takes a minute)...
     --name "Wardogs Profit Tracker" ^
     --hidden-import obsws_python ^
     --hidden-import PIL.ImageTk ^
+    --hidden-import pystray._win32 ^
+    --add-data "overlay\money_hud.html;overlay" ^
+    --add-data "overlay\leaderboard.html;overlay" ^
     --collect-all playwright ^
     wardogs_profit_tracker.py
 if errorlevel 1 goto fail

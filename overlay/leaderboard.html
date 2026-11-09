@@ -1,0 +1,315 @@
+<!doctype html>
+<!-- wardogs-page-version: 4 (the tracker replaces older copies; keep this line) -->
+<!--
+  Wardogs leaderboard — OBS Browser Source overlay.
+
+  A panel with everyone on the tracker's leaderboard, styled like the game's
+  money HUD (same look as money_hud.html). First place gets a gold crown, your
+  own picture, or just "1" (chosen in the tracker: Leaderboard › 1st place).
+  Re-sorts live; rows slide to their new place.
+
+  It follows the tracker's Leaderboard settings (who's on it, order, How many,
+  Number places, Names, 1st place) and asks http://127.0.0.1:8765/board every 100 ms.
+
+  URL options (after the file name):
+    ?title=TEXT       the heading (default LEADERBOARD; ?title= with nothing hides it)
+    ?plus=1           show "+$" for profit (default: just "$")
+    ?interval=100     how often to ask the tracker, in ms
+    ?server=URL       the tracker's address (default http://127.0.0.1:8765)
+    ?preview=1        sample rows over a dark background, and a live shuffle
+                      (&pl=1 colours amounts green / red, &size=24 bigger text)
+
+  Text size and colour (and colour by profit / loss) are set in the tracker:
+  Advanced › Browser overlays. Those override --digit-height and --color below.
+                      (&first=number or &first=image&icon=URL to try the others)
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Wardogs leaderboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&display=block" rel="stylesheet">
+<style>
+  :root {
+    /* ======== LOOK — same values as money_hud.html ======== */
+    --digit-height: 18px;     /* height of the digits */
+    --font: "Barlow";         /* set in the tracker: Advanced › Browser overlays › Font */
+    --weight: 400;            /* Barlow weight */
+    --stroke: 0.2px;          /* extra same-colour outline (400 + 0.2px = 2.3 px strokes) */
+    --color: #C5C2BF;         /* text colour */
+    --tracking: 0.040em;      /* letter spacing */
+    --bg-rgb: 0, 0, 0;        /* panel colour (red, green, blue) — black */
+    --box-opacity: 0.45;      /* panel: that colour at this opacity */
+    --panel-min-w: 0px;       /* panel width at least this (0px: fit the names) */
+    --figure-ratio: 0.760;    /* Barlow's digit height ÷ font-size (measured) */
+
+    /* ======== LEADERBOARD — everything grows with the text size ========
+         (each is N × digit-height / 18, i.e. N px at the game's 18px) */
+    --row-height: calc(var(--digit-height) * 32 / 18);      /* height of each row */
+    --first-row-height: calc(var(--digit-height) * 42 / 18);/* 1st place is taller to fit the icon */
+    --icon-size: calc(var(--digit-height) * 34 / 18);       /* the crown, or your picture */
+    --rank-width: calc(var(--digit-height) * 34 / 18);      /* the place / icon column, so every name lines up */
+    --pad-x: calc(var(--digit-height) * 14 / 18);           /* space left / right inside the panel */
+    --pad-top: calc(var(--digit-height) * 10 / 18); --pad-bottom: calc(var(--digit-height) * 8 / 18);
+    --gap-name: calc(var(--digit-height) * 10 / 18);        /* between the place / icon and the name */
+    --gap-amount: calc(var(--digit-height) * 24 / 18);      /* at least this much between the name and the amount */
+    --title-size: calc(var(--digit-height) * 15 / 18);      /* the LEADERBOARD heading */
+    --title-spacing: 0.25em;
+    --divider: rgba(197, 194, 191, 0.15);  /* thin line between rows */
+    --gold: #D4AF37;          /* the crown */
+    --icon-radius: 4px;       /* rounded corners on your own picture (50% for a circle) */
+    --slide-ms: 450;          /* how long rows take to slide to a new place */
+  }
+
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+
+  .panel {
+    position: absolute; top: 0; right: 0;          /* anchored top-right: grows left and down */
+    background: rgba(var(--bg-rgb), var(--box-opacity));
+    min-width: var(--panel-min-w); box-sizing: border-box; isolation: isolate;
+    padding: var(--pad-top) var(--pad-x) var(--pad-bottom);
+    font-family: var(--font), "Barlow", sans-serif; font-weight: var(--weight);
+    font-size: calc(var(--digit-height) / var(--figure-ratio));
+    color: var(--color); -webkit-text-stroke: var(--stroke) var(--color);
+    letter-spacing: var(--tracking); line-height: 1; white-space: nowrap;
+  }
+  .panel.empty { display: none; }
+  /* your picture as the background (set in the tracker), faded by --box-opacity */
+  .bgimg .panel { background: none; }
+  .bgimg .panel::before { content: ""; position: absolute; inset: 0; z-index: -1;
+    background: var(--bg-image) center / cover no-repeat; opacity: var(--box-opacity); }
+  .title { font-size: var(--title-size); letter-spacing: var(--title-spacing); opacity: .7;
+           -webkit-text-stroke: 0; margin: 0 0 6px; }
+  .title:empty { display: none; }
+  .rows { position: relative; }
+  .row { display: flex; align-items: center; height: var(--row-height); will-change: transform; }
+  .row + .row { border-top: 1px solid var(--divider); }
+  .row.first.iconic { height: var(--first-row-height); }
+  .rank { width: var(--rank-width); flex: none; opacity: .6; margin-right: var(--gap-name);
+          display: flex; align-items: center; }
+  .row.iconic .rank { opacity: 1; }
+  .row.noranks:not(.iconic) .rank { display: none; }
+  .icon { width: var(--icon-size); height: var(--icon-size); display: block; flex: none;
+          -webkit-text-stroke: 0; }
+  .icon .gold { fill: var(--gold); }
+  img.icon { object-fit: cover; border-radius: var(--icon-radius); }
+  .amount { color: var(--color); -webkit-text-stroke: var(--stroke) var(--color); margin-left: auto; padding-left: var(--gap-amount); margin-right: calc(-1 * var(--tracking)); }
+  .name:empty { display: none; }
+
+  /* ---------- ?preview=1 only ---------- */
+  html:has(body.preview) { background: #1b1e22; }
+  body.preview {
+    min-height: 100vh; overflow: auto; background-color: #1b1e22;
+    background-image:
+      repeating-linear-gradient(45deg, rgba(255,255,255,.035) 0 2px, transparent 2px 7px),
+      repeating-linear-gradient(-45deg, rgba(0,0,0,.25) 0 3px, transparent 3px 11px),
+      radial-gradient(circle at 30% 20%, #3a4048 0%, #1b1e22 60%);
+  }
+  body.preview .panel { top: 24px; right: 24px; }
+</style>
+</head>
+<body>
+<div class="panel empty" id="panel"><div class="title" id="title"></div><div class="rows" id="rows"></div></div>
+
+<!-- 1st place: a gold crown -->
+<template id="crown">
+  <svg class="icon crown" viewBox="0 0 24 24" aria-hidden="true">
+    <g class="gold"><path d="M2.6 18.4h18.8l1.6-11.6-5.5 4.4L12 3.6 6.5 11.2 1 6.8z"/>
+      <rect x="2.6" y="19.6" width="18.8" height="2.4" rx=".6"/></g>
+  </svg>
+</template>
+
+<script>
+  const P = new URLSearchParams(location.search);
+  const SERVER = (P.get("server") || "http://127.0.0.1:8765").replace(/\/+$/, "");
+  const INTERVAL = Math.max(50, parseInt(P.get("interval") || "100", 10) || 100);
+  const SHOW_PLUS = P.get("plus") === "1";
+  const SLIDE = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--slide-ms")) || 450;
+  document.getElementById("title").textContent = P.has("title") ? P.get("title") : "LEADERBOARD";
+
+  // "+$3,740" -> "$3,740", "-$350" -> "-$350"
+  function money(raw) {
+    const t = String(raw || "").trim();
+    const m = t.match(/([+\-−]?)\s*\$\s*([\d,]+(?:\.\d+)?)/);
+    if (!m) return t;
+    const neg = m[1] === "-" || m[1] === "−";
+    return (neg ? "-" : (SHOW_PLUS && m[1] === "+" ? "+" : "")) + "$" + m[2];
+  }
+
+
+  // the look set in the tracker (Advanced › Browser overlays): text size,
+  // colour, and profit / loss colours. Sent with every answer.
+
+  // the font (Advanced › Browser overlays › Font): a Google font is loaded
+  // from Google Fonts, an installed one is used as it is. Digits are drawn
+  // at --digit-height in any font: its digit height is measured once loaded.
+  let fontKey = "";
+  async function applyFont(st) {
+    const font = (st && st.font) || "Barlow", web = !st || st.webFont !== false;
+    if (font + web === fontKey) return;
+    fontKey = font + web;
+    const root = document.documentElement.style;
+    if (web && font !== "Barlow" && !document.querySelector(`link[data-font="${CSS.escape(font)}"]`)) {
+      const l = document.createElement("link");
+      l.rel = "stylesheet"; l.dataset.font = font;
+      l.href = "https://fonts.googleapis.com/css2?family=" + encodeURIComponent(font).replace(/%20/g, "+")
+             + ":wght@400&display=block";
+      document.head.appendChild(l);
+      await new Promise(res => { l.onload = l.onerror = res; });
+    }
+    root.setProperty("--font", `"${font.replace(/"/g, "")}"`);
+    root.removeProperty("--figure-ratio");          // back to the hand-tuned Barlow value
+    if (font === "Barlow") return;
+    // match Barlow's digits as tuned: measure both, scale the new font to Barlow's height
+    try { await Promise.all([document.fonts.load(`100px "${font}"`, "0123456789$"),
+                             document.fonts.load('100px "Barlow"', "0123456789$")]); } catch (e) {}
+    if (fontKey !== font + web) return;            // changed again meanwhile
+    const c = document.createElement("canvas").getContext("2d");
+    const ink = f => { c.font = `400 100px ${f}`; return c.measureText("0123456789").actualBoundingBoxAscent / 100; };
+    const h = ink(`"${font}", "Barlow"`), barlow = ink('"Barlow"');
+    const tuned = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--figure-ratio")) || 0.76;
+    const ratio = barlow > 0.3 ? h * tuned / barlow : h;
+    if (ratio > 0.3 && ratio < 1.4) root.setProperty("--figure-ratio", ratio.toFixed(3));
+    else root.removeProperty("--figure-ratio");
+  }
+
+  let style = null, styleKey = "";
+  function applyStyle(st) {
+    const key = JSON.stringify(st || null);
+    if (key === styleKey) return false;
+    styleKey = key; style = st || null;
+    applyFont(style);
+    const root = document.documentElement.style;
+    if (style && style.size) root.setProperty("--digit-height", style.size + "px");
+    else root.removeProperty("--digit-height");
+    if (style && style.color) root.setProperty("--color", style.color);
+    else root.removeProperty("--color");
+    // the box behind the text: a colour at some opacity, or your own picture
+    const set = (k, v) => v === null ? root.removeProperty(k) : root.setProperty(k, v);
+    const hex = style && /^#[0-9a-f]{6}$/i.test(style.bg || "") ? style.bg : null;
+    set("--bg-rgb", hex ? [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(", ") : null);
+    set("--box-opacity", style && Number.isFinite(style.opacity) ? String(style.opacity / 100) : null);
+    const img = style && style.image ? `url("${SERVER}/bg?v=${encodeURIComponent(style.image)}")` : null;
+    set("--bg-image", img);
+    document.documentElement.classList.toggle("bgimg", !!img);
+    // box size (0 / missing: fit the text)
+    set("--box-min-w", style && style.hudW > 0 ? style.hudW + "px" : null);
+    set("--box-height", style && style.hudH > 0 ? style.hudH + "px" : null);
+    set("--panel-min-w", style && style.boardW > 0 ? style.boardW + "px" : null);
+    return true;
+  }
+  // an amount's colour: profit / loss when that's on, else the text colour
+  function paintAmount(el, raw) {
+    const t = String(raw || "");
+    const neg = /[-−]\s*\$?\s*\d/.test(t), zero = !/[1-9]/.test(t);
+    if (style && style.pl && !zero) el.style.setProperty("--color", neg ? style.loss : style.profit);
+    else el.style.removeProperty("--color");
+  }
+
+  const panel = document.getElementById("panel"), rowsEl = document.getElementById("rows");
+  const crownTpl = document.getElementById("crown");
+  const byName = new Map();          // one row element per person, reused so rows can slide
+  let lastKey = null;
+
+  // 1st place: the crown, your picture (falls back to the crown if it won't load), or "1"
+  function firstMark(rank, board) {
+    if (board.first === "number") { rank.textContent = "1"; return false; }
+    const want = board.first === "image" && board.icon ? board.icon : "crown";
+    if (rank.dataset.mark !== want) {
+      rank.dataset.mark = want;
+      if (want === "crown") rank.replaceChildren(crownTpl.content.cloneNode(true));
+      else {
+        const img = new Image();
+        img.className = "icon"; img.alt = "";
+        img.onerror = () => { rank.dataset.mark = "crown"; rank.replaceChildren(crownTpl.content.cloneNode(true)); };
+        img.src = board.iconUrl || `${SERVER}/icon?v=${encodeURIComponent(want)}`;
+        rank.replaceChildren(img);
+      }
+    }
+    return true;
+  }
+
+  // board = { rows: [{name, text}], ranks, names, first: "crown"|"number"|"image", icon }
+  // (already sorted, and cut to How many, by the tracker)
+  function render(board) {
+    const key = JSON.stringify(board);
+    if (key === lastKey) return;     // nothing changed: don't touch the page
+    lastKey = key;
+    applyStyle(board.style);
+    const rows = board.rows || [];
+    panel.classList.toggle("empty", rows.length === 0);
+    // FLIP: remember where each row was, rebuild, then slide from there
+    const before = new Map([...byName].map(([k, el]) => [k, el.getBoundingClientRect().top]));
+    const seen = new Set(), count = new Map();
+    rows.forEach((r, i) => {
+      const n = r.name || "";                      // same name twice: Alpha, Alpha#2
+      count.set(n, (count.get(n) || 0) + 1);
+      const k = n ? (count.get(n) > 1 ? `${n}#${count.get(n)}` : n) : `#${i}`;
+      seen.add(k);
+      let el = byName.get(k);
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "row";
+        el.innerHTML = '<span class="rank"></span><span class="name"></span><span class="amount"></span>';
+        byName.set(k, el);
+      }
+      const first = i === 0;
+      const rank = el.querySelector(".rank");
+      let iconic = false;
+      if (first) iconic = firstMark(rank, board);
+      else if (rank.dataset.mark || rank.textContent !== String(i + 1)) {
+        delete rank.dataset.mark; rank.textContent = String(i + 1);
+      }
+      el.classList.toggle("first", first);
+      el.classList.toggle("iconic", iconic);
+      el.classList.toggle("noranks", !board.ranks);
+      el.querySelector(".name").textContent = board.names === false ? "" : (r.name || "");
+      const amount = el.querySelector(".amount");
+      amount.textContent = money(r.text);
+      paintAmount(amount, r.text);
+      rowsEl.appendChild(el);        // appending in order puts the rows in order
+    });
+    for (const [k, el] of byName) if (!seen.has(k)) { el.remove(); byName.delete(k); }
+    for (const [k, el] of byName) {
+      const was = before.get(k);
+      if (was === undefined) continue;
+      const dy = was - el.getBoundingClientRect().top;
+      if (Math.abs(dy) > 1) {
+        el.animate([{ transform: `translateY(${dy}px)` }, { transform: "translateY(0)" }],
+                   { duration: SLIDE, easing: "cubic-bezier(.2,.8,.2,1)" });
+      }
+    }
+  }
+
+  if (P.get("preview") === "1") {
+    document.body.classList.add("preview");
+    const people = [["Alpha", 50816], ["Chopper", 12140], ["Oddball", -6575], ["Nill", 2380]];
+    const fmt = v => (v < 0 ? "-" : "+") + "$" + Math.abs(v).toLocaleString("en-US");
+    const first = P.get("first") || "crown";
+    const pst = { size: parseInt(P.get("size") || "18", 10), color: "#C5C2BF", pl: P.get("pl") === "1",
+                  profit: "#5FE39B", loss: "#FF8A7A" };
+    const show = () => render({ ranks: true, names: true, first, icon: P.get("icon") ? "preview" : "", style: pst,
+      iconUrl: P.get("icon"),
+      rows: [...people].sort((a, b) => b[1] - a[1]).map(([n, v]) => ({ name: n, text: fmt(v) })) });
+    show();
+    if (P.get("shuffle") !== "0") setInterval(() => {   // amounts change so places swap
+      const p = people[Math.floor(Math.random() * people.length)];
+      p[1] += Math.round((Math.random() - 0.35) * 30000);
+      show();
+    }, 2500);
+  } else {
+    let busy = false;
+    setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const r = await fetch(`${SERVER}/board`, { cache: "no-store" });
+        if (r.ok) render(await r.json());
+      } catch (e) { /* tracker not running yet: keep the last board, try again */ }
+      busy = false;
+    }, INTERVAL);
+  }
+</script>
+</body>
+</html>
