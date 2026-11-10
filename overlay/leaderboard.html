@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- wardogs-page-version: 4 (the tracker replaces older copies; keep this line) -->
+<!-- wardogs-page-version: 13(the tracker replaces older copies; keep this line) -->
 <!--
   Wardogs leaderboard — OBS Browser Source overlay.
 
@@ -96,6 +96,11 @@
   img.icon { object-fit: cover; border-radius: var(--icon-radius); }
   .amount { color: var(--color); -webkit-text-stroke: var(--stroke) var(--color); margin-left: auto; padding-left: var(--gap-amount); margin-right: calc(-1 * var(--tracking)); }
   .name:empty { display: none; }
+  /* team badge (the tracker's Teams chip): our shield, or your own picture */
+  .team { width: calc(var(--digit-height) * 22 / 18); height: calc(var(--digit-height) * 22 / 18); flex: none;
+          margin-right: calc(var(--digit-height) * 8 / 18); -webkit-text-stroke: 0; display: flex; }
+  .team:empty { display: none; }
+  .team svg, .team img { width: 100%; height: 100%; object-fit: contain; }
 
   /* ---------- ?preview=1 only ---------- */
   html:has(body.preview) { background: #1b1e22; }
@@ -107,9 +112,33 @@
       radial-gradient(circle at 30% 20%, #3a4048 0%, #1b1e22 60%);
   }
   body.preview .panel { top: 24px; right: 24px; }
+  /* ?stage=1: the tracker's Preview window — your live leaderboard on a dark background */
+  html:has(body.stage) { background: #1b1e22; }
+  body.stage {
+    min-height: 100vh; background-color: #1b1e22;
+    background-image:
+      repeating-linear-gradient(45deg, rgba(255,255,255,.035) 0 2px, transparent 2px 7px),
+      repeating-linear-gradient(-45deg, rgba(0,0,0,.25) 0 3px, transparent 3px 11px),
+      radial-gradient(circle at 30% 20%, #3a4048 0%, #1b1e22 60%);
+  }
+  body.stage .panel { top: 16px; right: 16px; }
+  /* the overlay editor's preview: in the middle of its area */
+  body.centered .panel { top: 50%; right: auto; left: 50%; transform: translate(-50%, -50%); }
+  #stage-note { display: none; position: absolute; left: 16px; bottom: 12px; font: 12px "Segoe UI", sans-serif;
+                color: #8a93a3; }
+  body.stage #stage-note { display: block; }
+  /* the Preview window's Full list toggle (never in OBS or the editor) */
+  #full-toggle { display: none; position: absolute; right: 16px; bottom: 10px; font: 12px "Segoe UI", sans-serif;
+                 color: #b8bfcc; background: #0b0e13; border: 1px solid #3a4352; border-radius: 6px;
+                 padding: 4px 10px; cursor: pointer; user-select: none; }
+  #full-toggle.on { color: #fff; border-color: #4c8dff; background: #16213a; }
+  body.stage #full-toggle { display: block; }
+  html.wd-hidden .box, html.wd-hidden .panel { visibility: hidden !important; }
 </style>
 </head>
 <body>
+<div id="stage-note"></div>
+<div id="full-toggle" role="button" tabindex="0" title="Everyone on the leaderboard, whatever How many is">☰ Full list</div>
 <div class="panel empty" id="panel"><div class="title" id="title"></div><div class="rows" id="rows"></div></div>
 
 <!-- 1st place: a gold crown -->
@@ -190,9 +219,12 @@
     const hex = style && /^#[0-9a-f]{6}$/i.test(style.bg || "") ? style.bg : null;
     set("--bg-rgb", hex ? [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(", ") : null);
     set("--box-opacity", style && Number.isFinite(style.opacity) ? String(style.opacity / 100) : null);
-    const img = style && style.image ? `url("${SERVER}/bg?v=${encodeURIComponent(style.image)}")` : null;
+    const img = style && style.imageUrl ? `url("${style.imageUrl}")` :
+      style && style.image ? `url("${SERVER}/bg?v=${encodeURIComponent(style.image)}")` : null;
     set("--bg-image", img);
     document.documentElement.classList.toggle("bgimg", !!img);
+    // Hide on stream (the tracker, or Streamer.bot): nothing shows, fully see-through
+    document.documentElement.classList.toggle("wd-hidden", !!(style && style.hidden));
     // box size (0 / missing: fit the text)
     set("--box-min-w", style && style.hudW > 0 ? style.hudW + "px" : null);
     set("--box-height", style && style.hudH > 0 ? style.hudH + "px" : null);
@@ -230,7 +262,28 @@
     return true;
   }
 
-  // board = { rows: [{name, text}], ranks, names, first: "crown"|"number"|"image", icon }
+  // a team's badge: your picture from the tracker, else our shield in the team's colour
+  const TEAMS = { lonestar: ["L", "#3A4BE6"], manticore: ["M", "#34A835"], valkyra: ["V", "#D62B24"] };  // the emblems' blue, green, red
+  function teamBadge(cell, team, pics, colors) {
+    const tint = team && TEAMS[team] ? (colors || {})[team] || TEAMS[team][1] : "";
+    const want = team && TEAMS[team] ? team + ":" + (pics[team] || "") + ":" + tint : "";
+    if (cell.dataset.team === want) return;
+    cell.dataset.team = want;
+    if (!want) { cell.replaceChildren(); return; }
+    if (pics[team]) {
+      const img = new Image(); img.alt = "";
+      img.onerror = () => { delete cell.dataset.team; teamBadge(cell, team, {}, colors); };
+      img.src = pics[team].startsWith("data:") ? pics[team]   // a saved picture brings its own
+        : `${SERVER}/team/${team}?v=${encodeURIComponent(pics[team])}`;
+      cell.replaceChildren(img);
+      return;
+    }
+    const letter = TEAMS[team][0];
+    cell.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="${tint}" d="M12 1.5 21 4.5V11c0 5.5-3.6 9.6-9 11.5C6.6 20.6 3 16.5 3 11V4.5Z"/>` +
+      `<text x="12" y="16.6" text-anchor="middle" font-family="Segoe UI, sans-serif" font-weight="700" font-size="12.5" fill="#11151C">${letter}</text></svg>`;
+  }
+
+  // board = { rows: [{name, text, team}], ranks, names, first: "crown"|"number"|"image", icon, teams, teamPics }
   // (already sorted, and cut to How many, by the tracker)
   function render(board) {
     const key = JSON.stringify(board);
@@ -239,6 +292,8 @@
     applyStyle(board.style);
     const rows = board.rows || [];
     panel.classList.toggle("empty", rows.length === 0);
+    if (P.get("stage") === "1") document.getElementById("stage-note").textContent = rows.length ? "Preview" :
+      "Preview — no one on the leaderboard has an amount yet";
     // FLIP: remember where each row was, rebuild, then slide from there
     const before = new Map([...byName].map(([k, el]) => [k, el.getBoundingClientRect().top]));
     const seen = new Set(), count = new Map();
@@ -251,7 +306,7 @@
       if (!el) {
         el = document.createElement("div");
         el.className = "row";
-        el.innerHTML = '<span class="rank"></span><span class="name"></span><span class="amount"></span>';
+        el.innerHTML = '<span class="rank"></span><span class="team"></span><span class="name"></span><span class="amount"></span>';
         byName.set(k, el);
       }
       const first = i === 0;
@@ -264,7 +319,12 @@
       el.classList.toggle("first", first);
       el.classList.toggle("iconic", iconic);
       el.classList.toggle("noranks", !board.ranks);
-      el.querySelector(".name").textContent = board.names === false ? "" : (r.name || "");
+      const nameEl = el.querySelector(".name");
+      nameEl.textContent = board.names === false ? "" : (r.name || "");
+      // a player's name in their team's colour (else the overlay's text colour)
+      const teamTint = board.teams && board.teamNames && r.team && (board.teamColors || {})[r.team];
+      nameEl.style.color = teamTint && /^#[0-9A-Fa-f]{6}$/.test(teamTint) ? teamTint : "";
+      teamBadge(el.querySelector(".team"), board.teams ? r.team : "", board.teamPics || {}, board.teamColors);
       const amount = el.querySelector(".amount");
       amount.textContent = money(r.text);
       paintAmount(amount, r.text);
@@ -282,7 +342,19 @@
     }
   }
 
-  if (P.get("preview") === "1") {
+  if (P.get("snapshot") === "1") {
+    // the tracker's "Save leaderboard" picture: draw the board it passes once, then say ready
+    render(JSON.parse(decodeURIComponent(location.hash.slice(1))));
+    (async () => {
+      await new Promise(r => setTimeout(r, 300));
+      await document.fonts.ready;
+      // every picture (emblems, 1st place) loaded, or given up on
+      await Promise.all([...document.images].map(i => i.complete ? 0 :
+        new Promise(r => { i.addEventListener("load", r); i.addEventListener("error", r); })));
+      await new Promise(r => setTimeout(r, 500));   // the font's digit measuring settles
+      document.body.dataset.ready = "1";
+    })();
+  } else if (P.get("preview") === "1") {
     document.body.classList.add("preview");
     const people = [["Alpha", 50816], ["Chopper", 12140], ["Oddball", -6575], ["Nill", 2380]];
     const fmt = v => (v < 0 ? "-" : "+") + "$" + Math.abs(v).toLocaleString("en-US");
@@ -299,12 +371,34 @@
       show();
     }, 2500);
   } else {
+    if (P.get("center") === "1") document.body.classList.add("centered");
+    if (P.get("stage") === "1") {
+      document.body.classList.add("stage");
+      document.title = "Leaderboard preview";
+      document.getElementById("stage-note").textContent = "Preview — waiting for the tracker…";
+    }
+    // the Preview window's Full list: everyone, whatever How many is (remembered here)
+    let full = P.get("full") === "1";
+    if (P.get("stage") === "1") {
+      try { full = full || localStorage.getItem("wardogs-full-list") === "1"; } catch (e) { /* no storage: off */ }
+      const t = document.getElementById("full-toggle");
+      const paint = () => t.classList.toggle("on", full);
+      const flip = () => {
+        full = !full; paint(); lastKey = "";     // redraw with the new list straight away
+        try { localStorage.setItem("wardogs-full-list", full ? "1" : "0"); } catch (e) { /* not remembered */ }
+      };
+      t.addEventListener("click", flip);
+      t.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } });
+      paint();
+    }
     let busy = false;
     setInterval(async () => {
       if (busy) return;
       busy = true;
       try {
-        const r = await fetch(`${SERVER}/board`, { cache: "no-store" });
+        // demo=1: the overlay editor's test players instead of your real leaderboard
+        const r = await fetch(`${SERVER}/board${P.get("demo") === "1" ? "?demo=1" : full ? "?full=1" : ""}`,
+                              { cache: "no-store" });
         if (r.ok) render(await r.json());
       } catch (e) { /* tracker not running yet: keep the last board, try again */ }
       busy = false;

@@ -42,6 +42,8 @@ for %%D in ("%~dp0." "%~dp0dist" "%LOCALAPPDATA%\%APP%") do (
     if exist "%%~D\settings.json.broken"    del /f /q "%%~D\settings.json.broken"
     if exist "%%~D\activity_log.txt"        del /f /q "%%~D\activity_log.txt"
     if exist "%%~D\steam_browser_profile"   rmdir /s /q "%%~D\steam_browser_profile"
+    if exist "%%~D\preview_browser"         rmdir /s /q "%%~D\preview_browser"
+    if exist "%%~D\editor_browser"          rmdir /s /q "%%~D\editor_browser"
     if exist "%%~D\.wardogs.lock"           del /f /q "%%~D\.wardogs.lock"
 )
 rmdir /s /q "%~dp0build" >nul 2>nul

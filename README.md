@@ -16,116 +16,164 @@ it works even if your profile is private.
 This is 100% vibe coded. I probably can't support it long term — if someone wants
 to take it over, that's OK with me.
 
+## What it can do
+
+- **Your amount, live** — in a text file for an OBS Text source, and / or a
+  browser overlay that looks like the game's own money HUD.
+- **Friends too** — track anyone on your Steam friends list, each with their
+  own file or overlay.
+- **A leaderboard** — everyone you pick, sorted by profit, as an overlay with a
+  gold crown for 1st and rows that slide as places change (and / or a text
+  file). Show WARDOGS teams with the factions' emblems and team colours.
+- **An Output editor** — change how the overlays and text files look with a
+  live preview and test players: font, size, colours, background, the
+  leaderboard's layout, and more.
+- **End-of-game tools** — one button (or an in-game hotkey) resets the
+  leaderboard for the next game, and can save the results as a text file and
+  a picture first.
+- **Streamer.bot and Twitch chat** — let Streamer.bot control the tracker, and
+  let viewers join the leaderboard and pick a team from chat.
+- **OBS colours** — turn each person's OBS Text source green or red with their
+  profit or loss.
+
 ## Download
 
 Grab `Wardogs.Profit.Tracker.exe` from the
-[latest release](../../releases/latest), put it in a normal folder (e.g. a
-"Wardogs" folder on your desktop or in Downloads) and run it. Nothing else to
-install — Python and everything it needs are inside the exe; it uses Microsoft
-Edge (part of Windows 10/11) in the background.
-
-Settings and your Steam sign-in are saved next to the exe. If Windows won't
-allow that (Program Files, run straight from inside a zip, or Defender's
-"Controlled folder access"), they're saved in `%LOCALAPPDATA%\Wardogs Profit Tracker`
-instead, and the log says so. When signing in to Steam, keep **Remember me**
-ticked so you stay signed in.
+[latest release](../../releases/latest), put it in a normal folder (for example
+a "Wardogs" folder on your desktop) and run it. Nothing else to install:
+everything it needs is inside the exe, and it uses Microsoft Edge (part of
+Windows 10 / 11) in the background.
 
 Windows may show a SmartScreen warning because the exe isn't signed: click
 **More info → Run anyway**.
 
-## Use
+## Quick start
 
-1. Start the exe. The first time, a browser opens: sign in to Steam there.
-2. Pick a text file for your amount (**Separate file** › **Browse…**) and point
-   an OBS Text source at it (**Read from file**).
+1. Start the exe. The first time, a browser window opens: sign in to Steam
+   there and keep **Remember me** ticked, so you stay signed in.
+2. Your card is first in the list. Pick how to show your amount:
+   - **📺 Overlay**, then click the **Overlay link** and paste it into an OBS
+     **Browser** source (Local file unticked, 400 × 39), or
+   - **📄 Save to file**, pick a file, and point an OBS **Text** source at it
+     (**Read from file**).
 3. Play. New amounts show up within a few seconds of Steam sending them.
-4. Optional, a live overlay that looks like the game's money HUD: turn on
-   **📺 Overlay** on your card, click the **Overlay link** and paste it into an
-   OBS **Browser** source (Local file unticked). No text file needed.
-5. Optional, to colour an OBS Text source too: open **Advanced › OBS WebSocket**,
-   enter your details (OBS › Tools › WebSocket Server Settings › Show Connect
-   Info), type each person's OBS Text source name on their card (under their
-   separate file) and press **Test**. With **Color by profit / loss** on, it
-   connects by itself.
 
-## Settings
+## The window
 
-- **People** — whose amounts to show: you (default) and/or friends. Click a
-  person to search your Steam friends list, with profile pictures (it fills in
-  once the tracker is running); you can also type a name. A friend's amount
-  shows while they're in WARDOGS. **+ Add person** tracks several at once.
-  Each person has:
-  - **Name**: **Steam name**, or **Custom…** to type your own label. It's used
-    wherever their name is shown — their separate file and the leaderboard.
-  - **Separate file** — their own text file. Its **Name** chip (off by
-    default) puts their name in front: `Name: +$3,740`.
-  - **Leaderboard** — puts them in the shared leaderboard file. Both can be on
-    at once (e.g. your own file *and* the leaderboard).
-  - **OBS source** (with Color by profit / loss on) — the OBS Text source showing their
-    separate file. It turns green or red from that person's own amount, so
-    everyone's source is coloured on its own. The leaderboard isn't coloured
-    (one OBS text source can only be one colour).
-- **Leaderboard** — everyone on the leaderboard, as a text file (a line each)
-  and / or a **📺 Browser overlay**. **Highest first** (re-sorts as amounts
-  change) or **List order**, plus **Number places** and **Names**:
-  `1. Name: +$3,740`. **How many** keeps it to the first few (**All**, or **Top** and − / + for 1–30).
-  People with no amount right now (in menus, offline) are left off.
-- **📺 Overlay** (on a person's card) — a live browser overlay for that person;
-  see below.
-- **Advanced › Minimize to tray** — minimising hides the window to a tray icon
-  (Show / Start-Stop tracking / Quit). On by default; starting the app again
-  brings the window back.
-- **Advanced › Start with Windows** (off by default) — opens when you sign in
-  to Windows and starts tracking, straight to the tray when Minimize to tray is
-  on. Turn it off there (or uninstall) to remove it.
-- **Advanced › Browser overlays** — the 📺 overlays' **Font** (Barlow, the game's,
-  by default; HUD-style Google fonts like Oswald, Rajdhani, Teko, Bebas Neue, or any
-  font installed on your PC), **Text size** (− / +,
-  18 px is the game's own), **Text color**, and **Color by profit / loss** (chips for
-  **Money HUD** and **Leaderboard**, each on its own) with its own Profit and
-  Loss colours (names and $0 keep the text colour);
-  **Background** — a colour with **Opacity**, or your own **Image**; **box
-  sizes** (Auto fits the text); and **Size OBS sources to fit**, which sets the
-  Width / Height of every OBS Browser source showing an overlay (over OBS
-  WebSocket — it finds them by their link, no names to type). Changes show in
-  OBS within a moment.
-- **Advanced › `+$3,740` / `+ $3,740`** — with or without a space after the
-  +/- (no space by default).
-- **Advanced › Refresh friends page** — **Off** (default), or every 15, 30 or
-  60 minutes. The page updates live on its own; refreshing it often can get you
-  rate limited by Steam, so only pick a time if the number stops updating.
-- **Advanced › App / OBS text color › Color by profit / loss** — one switch for colouring the
-  amount in the app and each person's OBS source (green / red, colours
-  pickable). Off: plain white, and OBS isn't touched.
-- **Advanced › OBS WebSocket** — connection details (fold away with **Connection**),
-  **Test**, and **Connect / Disconnect**. Turning colouring on connects
-  automatically if someone has an OBS source; **Disconnect** stops using OBS
-  until you press **Connect**. OBS is only contacted when someone has an OBS
-  source filled in.
-- **Advanced › Keep last amount** (switch, on by default) — keeps showing the last
-  amount in menus instead of going blank. Advanced opens as you last left it.
+**People** — whose amounts to show: you, and any friends (**+ Add person**,
+then click the name to search your friends list). Friends are tracked by their
+Steam account, so a name change doesn't lose them. Each card has:
 
-### Money HUD overlay (OBS Browser Source)
+- **Name**: their Steam name, their linked **Twitch name**, or a **Custom…** label.
+- **📄 Save to file**: their own text file (its **Name** chip puts their name in
+  front: `Name: +$3,740`), and with OBS colouring on, the OBS Text source to
+  colour.
+- **🏆 Leaderboard**, with **📌** to pin them: pinned players stay on after a
+  reset, and only show while they're in a game.
+- **📺 Overlay**: their own money HUD.
+- **🛡 Team** (while Teams is on) and **🔗 Link** for their Twitch account (while
+  Streamer.bot is on).
 
-`overlay/money_hud.html` shows a person's live profit styled like the game's
-money HUD, updating within ~100 ms. Turn on **📺 Overlay** on a person's card and
-click the **Overlay link** to copy it, then add an OBS **Browser** source with
-**Local file unticked** and the link as the URL (400 × 39).
+**Leaderboard** — switch it on to use it.
 
-`overlay/leaderboard.html` is the same look for the whole leaderboard: 1st place
-gets a gold crown (or **1st place › Custom** for your own picture, or **Number**
-for a plain `1`), and rows slide when places change. Turn on **📺 Browser
-overlay** in the Leaderboard panel and copy its link the same way.
+- **📺 Browser overlay** and **👁 Preview**: the preview opens a small window
+  with the live leaderboard as it looks on stream, with a **☰ Full list**
+  toggle to see everyone.
+- **🧹 Reset**: everyone off except you and anyone pinned, amounts back to zero,
+  ready for the next game. Nothing resets by itself.
+- **⌨**: the reset hotkey (**Ctrl+Alt+S** by default, works even in-game). Click
+  it to turn it on / off or pick other keys.
+- **💾 Save results on reset**: Reset first saves a dated text file of the
+  standings and a picture of the leaderboard in **Saved leaderboards** next to
+  the app (**Open folder**).
+- **📌 Pin by default**: everyone you put on the leaderboard is pinned.
 
-Neither needs a text file. Full steps and the style settings:
-`overlay/OBS_SETUP.md`. The tracker answers on `127.0.0.1:8765` (this PC only),
-and only while an overlay is turned on.
+**Live output** — what's being written and shown right now, and
+**✏ Edit outputs** to open the Output editor.
 
-**Show log** opens `activity_log.txt` (next to the exe), which records every change
-with a time stamp — handy if something looks stuck.
+**Advanced** (opens as you left it):
 
-The OBS password is stored encrypted with your Windows account (DPAPI); it can't be
-read on another PC.
+- **Minimize to tray** (on by default) and **Start with Windows** (off by default).
+- **Friend folders**: sorts your people into **Active** (playing) and
+  **Inactive**, plus your own folders (📁 on a card), with a search box. Pin a
+  folder to keep everyone in it on the leaderboard.
+- **Twitch names by default**: everyone goes by their linked Twitch name
+  (their Steam name until they're linked).
+- **Hide overlays on stream**: the overlays show nothing until you turn it off.
+- **Refresh friends page**: off by default, since the page updates live; only
+  pick a time if the number stops updating.
+- **Streamer.bot**: see below.
+
+## Output editor
+
+**✏ Edit outputs** opens a window with a live preview on the left and the
+settings on the right. Tabs at the top switch between the **🏆 Leaderboard**,
+the **$ Money HUD**, a person's **📄 Text file** and the **📄 Leaderboard txt**,
+and only the settings for that output are shown. Every change saves straight
+away and shows on stream within a moment.
+
+- **Overlays**:
+  - Font (Barlow, the game's, HUD-style Google fonts, or any font on your PC),
+    size and colour.
+  - Profit / loss colours.
+  - Background: a colour with opacity, or a picture.
+  - Box size.
+- **Leaderboard**:
+  - Order (highest first, or as listed), places, names and how many.
+  - 1st place: crown, number or your own picture.
+  - Teams with their emblems or your own badges, team colours, and names in
+    team colour.
+- **Text files**: the leaderboard's text file, and the money format
+  (`+$3,740` or `+ $3,740`).
+- **Keep last amount**: for each output on its own, keep showing the last
+  amount in menus instead of going blank.
+- **OBS WebSocket**:
+  - **Color by profit / loss** for the app and each person's OBS Text source.
+  - Connection details, folded away so the password isn't on screen.
+  - Test and Connect / Disconnect.
+  - **Size OBS sources to fit**, which resizes the overlays' Browser sources
+    in OBS for you.
+
+## Overlays in OBS
+
+Both overlays read the tracker directly, so they don't need a text file. Add an
+OBS **Browser** source with **Local file unticked** and the overlay's link as
+the URL:
+
+- **Money HUD**: turn on **📺 Overlay** on a card and click its **Overlay
+  link**. Size 400 × 39.
+- **Leaderboard**: turn on **📺 Browser overlay** in the Leaderboard panel and
+  click its **Overlay link**. The panel is anchored top-right.
+
+Full steps and the finer details: [`overlay/OBS_SETUP.md`](overlay/OBS_SETUP.md).
+
+## Streamer.bot
+
+Turn on **Advanced › Streamer.bot › Let Streamer.bot control the tracker**. Every
+command is listed there with a **Copy** button; paste the link into a
+Streamer.bot **Fetch URL** sub-action. Commands can hide the overlays, change
+colours, add people to the leaderboard, set teams, refresh, reset and more.
+The tracker can also send each game's result to a Streamer.bot action, so it
+can post it in chat.
+
+Viewers can use Twitch chat commands: `!join wardogs leaderboard [team]`,
+`!wardogs team <team>`, `!wardogs friends` (whispers who's playing) and, for
+mods, `!wardogs tracker link`. Setup and every command:
+[`STREAMERBOT.md`](STREAMERBOT.md).
+
+## Privacy and files
+
+- Settings (`settings.json`), your Steam sign-in and the activity log are kept
+  next to the exe. If Windows won't allow that (Program Files, run from inside
+  a zip, or Defender's "Controlled folder access"), they go in
+  `%LOCALAPPDATA%\Wardogs Profit Tracker` instead, and the log says so.
+- The tracker answers overlays and Streamer.bot on `127.0.0.1:8765`: this PC
+  only, and only while something needs it. Websites you visit can't read it.
+  Streamer.bot needs your private key.
+- The OBS password is stored encrypted with your Windows account (DPAPI).
+- The tracker's browsers never sign in to your Microsoft account.
+- **Show log** opens `activity_log.txt`, which records every change with a
+  time stamp. It's handy if something looks stuck.
 
 ## Build it yourself
 
@@ -135,8 +183,8 @@ Needs Python 3 on Windows. Run:
 build_exe.bat
 ```
 
-It installs the dependencies (playwright, obsws-python, pillow, pyinstaller) and builds
-`dist\Wardogs Profit Tracker.exe`.
+It installs the dependencies (playwright, obsws-python, pillow, pystray,
+pyinstaller) and builds `dist\Wardogs Profit Tracker.exe`.
 
 ## Remove
 
@@ -152,3 +200,11 @@ text files it wrote, and optionally the build tools.
 - **[Download Wardogs.Profit.Tracker.exe](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest/download/Wardogs.Profit.Tracker.exe)** (always the newest version)
 - [Newest release notes](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest)
 - [All releases](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases)
+
+## Credits
+
+The Lonestar, Valkyra and Manticore faction emblems in `overlay/teams/` are
+artwork from WARDOGS by BULKHEAD, published by Team17. They're included
+only to show players' teams while playing and streaming the game. This
+tracker is a free fan project, not affiliated with or endorsed by BULKHEAD
+or Team17.

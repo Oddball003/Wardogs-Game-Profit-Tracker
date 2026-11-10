@@ -2,6 +2,9 @@
 settings.json
 settings.json.broken
 activity_log.txt
+Saved leaderboards/
+preview_browser/
+editor_browser/
 steam_browser_profile/
 .wardogs.lock
 *.tmp

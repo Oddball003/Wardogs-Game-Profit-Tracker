@@ -27,6 +27,8 @@ echo [2/2] Building the exe (takes a minute)...
     --hidden-import pystray._win32 ^
     --add-data "overlay\money_hud.html;overlay" ^
     --add-data "overlay\leaderboard.html;overlay" ^
+    --add-data "overlay\editor.html;overlay" ^
+    --add-data "overlay\teams;overlay\teams" ^
     --collect-all playwright ^
     wardogs_profit_tracker.py
 if errorlevel 1 goto fail

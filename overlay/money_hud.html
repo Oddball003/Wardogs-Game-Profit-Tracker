@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- wardogs-page-version: 4 (the tracker replaces older copies; keep this line) -->
+<!-- wardogs-page-version: 6(the tracker replaces older copies; keep this line) -->
 <!--
   Wardogs money HUD — OBS Browser Source overlay.
 
@@ -99,6 +99,9 @@
   .preview .row { position: relative; width: min(460px, 100%); height: var(--box-height); margin: 0 0 22px; }
   .preview .row .box { position: absolute; }
   .preview .label { font-size: 12px; margin: 0 0 6px; }
+  html.wd-hidden .box, html.wd-hidden .panel { visibility: hidden !important; }
+  /* the overlay editor's preview: in the middle of its area */
+  body.centered .box { top: 50%; right: auto; left: 50%; transform: translate(-50%, -50%); }
 </style>
 </head>
 <body>
@@ -106,6 +109,7 @@
 
 <script>
   const P = new URLSearchParams(location.search);
+  if (P.get("center") === "1") document.body.classList.add("centered");
   const SERVER = (P.get("server") || "http://127.0.0.1:8765").replace(/\/+$/, "");
   const PERSON = P.get("person") || "1";
   const INTERVAL = Math.max(50, parseInt(P.get("interval") || "100", 10) || 100);
@@ -183,6 +187,8 @@
     const img = style && style.image ? `url("${SERVER}/bg?v=${encodeURIComponent(style.image)}")` : null;
     set("--bg-image", img);
     document.documentElement.classList.toggle("bgimg", !!img);
+    // Hide on stream (the tracker, or Streamer.bot): nothing shows, fully see-through
+    document.documentElement.classList.toggle("wd-hidden", !!(style && style.hidden));
     // box size (0 / missing: fit the text)
     set("--box-min-w", style && style.hudW > 0 ? style.hudW + "px" : null);
     set("--box-height", style && style.hudH > 0 ? style.hudH + "px" : null);
@@ -230,7 +236,9 @@
       if (busy) return;
       busy = true;
       try {
-        const r = await fetch(`${SERVER}/value?person=${encodeURIComponent(PERSON)}`, { cache: "no-store" });
+        // demo=1: the overlay editor's test amount instead of a real one
+        const r = await fetch(`${SERVER}/value?person=${encodeURIComponent(PERSON)}${P.get("demo") === "1" ? "&demo=1" : ""}`,
+                              { cache: "no-store" });
         if (r.ok) { const j = await r.json(); show(j.text, j.style); }
       } catch (e) { /* tracker not running yet: try again next time */ }
       busy = false;

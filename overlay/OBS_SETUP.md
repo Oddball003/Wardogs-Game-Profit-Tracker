@@ -39,23 +39,27 @@ closed. When there's no amount (menus), the box disappears.
 
 ## Fine-tune the look
 
-The quick ones are in the tracker under **Advanced › Browser overlays**: **Font**
-(Google fonts load from the internet; installed fonts are used as they are —
-digits come out as tall as Barlow's in any font), **Text
-size**, **Text color** and **Color by profit / loss** (with its own Profit and
-Loss colours; turn it on for the **Money HUD**, the **Leaderboard**, or both). They apply to both overlays and show within a moment; the box,
-padding and leaderboard rows grow with the text size. Also there:
+Press **✏ Edit outputs** in the tracker (top of the Live output panel). A window opens with a live preview of the leaderboard or the
+money HUD (with test players) and the settings beside it; every change saves
+straight away and shows in OBS within a moment:
 
-- **Background** — **Color** (pick one) with **Opacity** (0 % = no box), or
-  **Image**: your own picture (png, jpg, gif, webp, svg) filling the box, faded
-  by the same Opacity. The text itself is never faded.
-- **Money HUD box W / H** and **Leaderboard box W** — **Auto** fits the text;
-  hold − / + to step quickly. A wider HUD box keeps the number on the right.
+- **Text** — **Font** (Google fonts load from the internet; installed fonts are
+  used as they are — digits come out as tall as Barlow's in any font), **Size**
+  and **Color**. The box, padding and leaderboard rows grow with the text size.
+- **Profit / loss colours** — for the **Money HUD**, the **Leaderboard**, or both.
+- **Background** — **Color** with **Opacity** (0 % = no box), or a **Picture**
+  (png, jpg, gif, webp, svg) filling the box, faded by the same Opacity. The
+  text itself is never faded.
+- **Box size** — Money HUD W / H and Leaderboard W (0 fits the text). A wider
+  HUD box keeps the number on the right.
+
+In the editor's **OBS WebSocket** section:
+
 - **Size OBS sources to fit** — with OBS WebSocket connected, the tracker sets
   the **Width / Height** of every Browser source showing `money_hud.html` or
   `leaderboard.html` (found by its link — no names to type), and keeps them in
   step when the text size, box size or number of leaderboard people changes.
-  **Resize in OBS now** does it once. Sizes are shown under the switch.
+  **Resize in OBS now** does it once. Sizes are shown under it.
 
 These override `--digit-height`, `--color`, `--bg-rgb`, `--box-opacity`,
 `--box-height` and the box widths in the file.
@@ -81,15 +85,16 @@ Barlow is loaded from Google Fonts, so OBS needs internet when it starts the pag
    the panel should sit.
 
 It follows the tracker's Leaderboard settings — who's on it, **Highest first** /
-**List order**, **How many**, **Number places**, **Names**. When places change
-the rows slide. Nobody with an amount: the panel disappears.
+**List order**, and in the Output editor **How many**, **Places**, **Names** and
+**Teams**. When places change the rows slide. Nobody with an amount: the panel
+disappears.
 
-**1st place** (under the Overlay link) picks what the leader gets:
+**1st place** (in the Output editor) picks what the leader gets:
 
 - **👑 Crown** (default) — a gold crown.
 - **# Number** — a plain `1`, like everyone else's place.
-- **🖼 Custom** — your own picture (png, jpg, gif, webp or svg, up to 8 MB).
-  Pick it with **Choose image…**; it stays where it is on your PC and the
+- **🖼 Picture** — your own picture (png, jpg, gif, webp or svg, up to 8 MB).
+  Pick it with **Choose…**; it stays where it is on your PC and the
   tracker hands it to the overlay. Swap the file and the overlay picks up the
   new one. If it can't be loaded, the crown is shown instead.
 
