@@ -1,7 +1,7 @@
 # Wardogs Game Profit Tracker
 
 A vibe coded Python program to track your current game profit or loss in WARDOGS
-and show it on stream.
+to show it on stream.
 
 It reads your status from the Steam friends page with a web browser (your default
 browser if it's Chrome-based, otherwise Edge), pulls out the money amount
