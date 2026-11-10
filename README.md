@@ -197,8 +197,8 @@ text files it wrote, and optionally the build tools.
 [![Latest release](https://img.shields.io/github/v/release/Oddball003/Wardogs-Game-Profit-Tracker?label=latest)](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Oddball003/Wardogs-Game-Profit-Tracker/total)](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases)
 
-- **[Download Wardogs.Profit.Tracker.exe](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest/download/Wardogs.Profit.Tracker.exe)** (always the newest version)
-- [Newest release notes](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest)
+- **[Download the latest version](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest/download/Wardogs.Profit.Tracker.exe)** (Wardogs.Profit.Tracker.exe)
+- [Latest release notes](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases/latest)
 - [All releases](https://github.com/Oddball003/Wardogs-Game-Profit-Tracker/releases)
 
 ## Credits
