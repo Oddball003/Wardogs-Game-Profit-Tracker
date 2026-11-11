@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- wardogs-page-version: 6(the tracker replaces older copies; keep this line) -->
+<!-- wardogs-page-version: 8(the tracker replaces older copies; keep this line) -->
 <!--
   Wardogs money HUD — OBS Browser Source overlay.
 
@@ -59,11 +59,16 @@
     padding: 0 var(--pad-right) 0 var(--pad-left);
     background: rgba(var(--bg-rgb), var(--box-opacity));
     min-width: var(--box-min-w);
+    width: max-content;                          /* its own size, even in a smaller source */
     display: flex; align-items: center; justify-content: flex-end;   /* number on the right */
     isolation: isolate;
     border-radius: 0;
   }
   .box.empty { display: none; }
+  /* Grows (set in the Output editor): which corner the box keeps */
+  html.ax-left .box { right: auto; left: 0; }
+  html.ax-center .box { right: auto; left: 50%; transform: translateX(-50%); }
+  html.ay-bottom .box { top: auto; bottom: 0; }
   /* your picture as the background (set in the tracker), faded by --box-opacity */
   .bgimg .box { background: none; }
   .bgimg .box::before { content: ""; position: absolute; inset: 0; z-index: -1;
@@ -109,6 +114,8 @@
 
 <script>
   const P = new URLSearchParams(location.search);
+  // the overlay as OBS shows it (not the editor's or the sample preview)
+  const LIVE = P.get("demo") !== "1" && P.get("center") !== "1" && P.get("preview") !== "1";
   if (P.get("center") === "1") document.body.classList.add("centered");
   const SERVER = (P.get("server") || "http://127.0.0.1:8765").replace(/\/+$/, "");
   const PERSON = P.get("person") || "1";
@@ -193,6 +200,13 @@
     set("--box-min-w", style && style.hudW > 0 ? style.hudW + "px" : null);
     set("--box-height", style && style.hudH > 0 ? style.hudH + "px" : null);
     set("--panel-min-w", style && style.boardW > 0 ? style.boardW + "px" : null);
+    // Grows (Output editor › OBS WebSocket): the corner it keeps in its OBS source
+    if (LIVE) {
+      const cls = document.documentElement.classList;
+      cls.toggle("ax-left", !!style && style.anchorX === "left");
+      cls.toggle("ax-center", !!style && style.anchorX === "center");
+      cls.toggle("ay-bottom", !!style && style.anchorY === "bottom");
+    }
     return true;
   }
   // an amount's colour: profit / loss when that's on, else the text colour
@@ -231,13 +245,39 @@
   } else {
     // live: ask the tracker every INTERVAL ms. If it's closed or restarting,
     // keep showing the last number and keep trying.
+    // in OBS: tell the tracker how big the box really is, so Size OBS sources
+    // to fit can make the Browser source exactly that size
+    // Largest (Size OBS sources to fit): also how big the box would be at -$999,999
+    const REPORT = LIVE;
+    const largest = () => {
+      const c = box.cloneNode(true);
+      c.removeAttribute("id"); c.classList.remove("empty");
+      c.style.cssText = "visibility:hidden; left:0; right:auto; top:0; bottom:auto; transform:none";
+      c.querySelector(".num").textContent = format("-$999,999");
+      document.body.appendChild(c);
+      const r = c.getBoundingClientRect(); c.remove();
+      return `&lw=${Math.ceil(r.width)}&lh=${Math.ceil(r.height)}`;
+    };
+    let largestQ = "", largestAt = -1e9;
+    const sizeQuery = () => {
+      if (!REPORT) return "";
+      let q = "";
+      if (!box.classList.contains("empty")) {
+        const r = box.getBoundingClientRect();
+        q = `&w=${Math.ceil(r.width)}&h=${Math.ceil(r.height)}`;
+      }
+      if (!(style && style.largest)) return q;
+      // the -$999,999 box only changes with the look: measure it once a second at most
+      if (performance.now() - largestAt > 1000) { largestQ = largest(); largestAt = performance.now(); }
+      return q + largestQ;
+    };
     let busy = false;
     setInterval(async () => {
       if (busy) return;
       busy = true;
       try {
         // demo=1: the overlay editor's test amount instead of a real one
-        const r = await fetch(`${SERVER}/value?person=${encodeURIComponent(PERSON)}${P.get("demo") === "1" ? "&demo=1" : ""}`,
+        const r = await fetch(`${SERVER}/value?person=${encodeURIComponent(PERSON)}${P.get("demo") === "1" ? "&demo=1" : sizeQuery()}`,
                               { cache: "no-store" });
         if (r.ok) { const j = await r.json(); show(j.text, j.style); }
       } catch (e) { /* tracker not running yet: try again next time */ }

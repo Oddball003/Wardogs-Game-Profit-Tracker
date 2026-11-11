@@ -44,6 +44,7 @@ for %%D in ("%~dp0." "%~dp0dist" "%LOCALAPPDATA%\%APP%") do (
     if exist "%%~D\steam_browser_profile"   rmdir /s /q "%%~D\steam_browser_profile"
     if exist "%%~D\preview_browser"         rmdir /s /q "%%~D\preview_browser"
     if exist "%%~D\editor_browser"          rmdir /s /q "%%~D\editor_browser"
+    for %%B in (chrome brave vivaldi opera) do for %%P in (steam_browser_profile preview_browser editor_browser) do if exist "%%~D\%%P_%%B" rmdir /s /q "%%~D\%%P_%%B"
     if exist "%%~D\.wardogs.lock"           del /f /q "%%~D\.wardogs.lock"
 )
 rmdir /s /q "%~dp0build" >nul 2>nul

@@ -6,6 +6,9 @@ Saved leaderboards/
 preview_browser/
 editor_browser/
 steam_browser_profile/
+steam_browser_profile_*/
+preview_browser_*/
+editor_browser_*/
 .wardogs.lock
 *.tmp
 

@@ -57,9 +57,25 @@ In the editor's **OBS WebSocket** section:
 
 - **Size OBS sources to fit** — with OBS WebSocket connected, the tracker sets
   the **Width / Height** of every Browser source showing `money_hud.html` or
-  `leaderboard.html` (found by its link — no names to type), and keeps them in
-  step when the text size, box size or number of leaderboard people changes.
+  `leaderboard.html` (found by its link — no names to type). **Size**:
+  - **Fit the overlay**: the exact size of the box or panel, so there's no
+    empty area around it. Each overlay tells the tracker its real size, so the
+    source follows as amounts get longer, people join or the look changes.
+    Each person's money HUD gets its own size.
+  - **Largest**: as big as the overlay can ever get, so the source never
+    changes size mid-game. The money HUD fits an amount of `-$999,999`; the
+    leaderboard fits every row it can have (**How many**, or everyone on it),
+    team badges, `-$999,999` amounts and names up to **Longest name**
+    characters (longer names are cut with "…").
+  - **Manual**: the width and height you type, for the money HUDs and the
+    leaderboard.
+
   **Resize in OBS now** does it once. Sizes are shown under it.
+- **Grows** — which way the overlays grow: **← Left**, **↔ Both** or
+  **→ Right**, and **↓ Down** or **↑ Up** (default: left and down). The
+  overlay sits in the opposite corner of its source, and when the tracker
+  resizes a source it moves it so that corner stays put on screen (not for
+  rotated sources or ones with a bounding box).
 
 These override `--digit-height`, `--color`, `--bg-rgb`, `--box-opacity`,
 `--box-height` and the box widths in the file.

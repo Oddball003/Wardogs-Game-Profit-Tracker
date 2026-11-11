@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- wardogs-page-version: 13(the tracker replaces older copies; keep this line) -->
+<!-- wardogs-page-version: 15(the tracker replaces older copies; keep this line) -->
 <!--
   Wardogs leaderboard — OBS Browser Source overlay.
 
@@ -68,6 +68,7 @@
     position: absolute; top: 0; right: 0;          /* anchored top-right: grows left and down */
     background: rgba(var(--bg-rgb), var(--box-opacity));
     min-width: var(--panel-min-w); box-sizing: border-box; isolation: isolate;
+    width: max-content;                            /* its own size, even in a smaller source */
     padding: var(--pad-top) var(--pad-x) var(--pad-bottom);
     font-family: var(--font), "Barlow", sans-serif; font-weight: var(--weight);
     font-size: calc(var(--digit-height) / var(--figure-ratio));
@@ -75,6 +76,10 @@
     letter-spacing: var(--tracking); line-height: 1; white-space: nowrap;
   }
   .panel.empty { display: none; }
+  /* Grows (set in the Output editor): which corner the panel keeps */
+  html.ax-left .panel { right: auto; left: 0; }
+  html.ax-center .panel { right: auto; left: 50%; transform: translateX(-50%); }
+  html.ay-bottom .panel { top: auto; bottom: 0; }
   /* your picture as the background (set in the tracker), faded by --box-opacity */
   .bgimg .panel { background: none; }
   .bgimg .panel::before { content: ""; position: absolute; inset: 0; z-index: -1;
@@ -96,6 +101,9 @@
   img.icon { object-fit: cover; border-radius: var(--icon-radius); }
   .amount { color: var(--color); -webkit-text-stroke: var(--stroke) var(--color); margin-left: auto; padding-left: var(--gap-amount); margin-right: calc(-1 * var(--tracking)); }
   .name:empty { display: none; }
+  /* Largest (Size OBS sources to fit): names cut to the longest it allows */
+  html.name-cap .name { max-width: calc(var(--name-chars) * (1ch + var(--tracking)));
+                        overflow: hidden; text-overflow: ellipsis; }
   /* team badge (the tracker's Teams chip): our shield, or your own picture */
   .team { width: calc(var(--digit-height) * 22 / 18); height: calc(var(--digit-height) * 22 / 18); flex: none;
           margin-right: calc(var(--digit-height) * 8 / 18); -webkit-text-stroke: 0; display: flex; }
@@ -151,6 +159,9 @@
 
 <script>
   const P = new URLSearchParams(location.search);
+  // the overlay as OBS shows it (not the editor's, the Preview window or the samples)
+  const LIVE = P.get("demo") !== "1" && P.get("center") !== "1" && P.get("stage") !== "1"
+    && P.get("preview") !== "1" && P.get("snapshot") !== "1";
   const SERVER = (P.get("server") || "http://127.0.0.1:8765").replace(/\/+$/, "");
   const INTERVAL = Math.max(50, parseInt(P.get("interval") || "100", 10) || 100);
   const SHOW_PLUS = P.get("plus") === "1";
@@ -229,6 +240,17 @@
     set("--box-min-w", style && style.hudW > 0 ? style.hudW + "px" : null);
     set("--box-height", style && style.hudH > 0 ? style.hudH + "px" : null);
     set("--panel-min-w", style && style.boardW > 0 ? style.boardW + "px" : null);
+    // Largest: names cut to the longest it allows (here and in the previews)
+    const cap = !!(style && style.largest && style.nameMax > 0);
+    document.documentElement.classList.toggle("name-cap", cap);
+    set("--name-chars", cap ? String(style.nameMax) : null);
+    // Grows (Output editor › OBS WebSocket): the corner it keeps in its OBS source
+    if (LIVE) {
+      const cls = document.documentElement.classList;
+      cls.toggle("ax-left", !!style && style.anchorX === "left");
+      cls.toggle("ax-center", !!style && style.anchorX === "center");
+      cls.toggle("ay-bottom", !!style && style.anchorY === "bottom");
+    }
     return true;
   }
   // an amount's colour: profit / loss when that's on, else the text colour
@@ -242,7 +264,7 @@
   const panel = document.getElementById("panel"), rowsEl = document.getElementById("rows");
   const crownTpl = document.getElementById("crown");
   const byName = new Map();          // one row element per person, reused so rows can slide
-  let lastKey = null;
+  let lastKey = null, lastBoard = null;
 
   // 1st place: the crown, your picture (falls back to the crown if it won't load), or "1"
   function firstMark(rank, board) {
@@ -288,7 +310,7 @@
   function render(board) {
     const key = JSON.stringify(board);
     if (key === lastKey) return;     // nothing changed: don't touch the page
-    lastKey = key;
+    lastKey = key; lastBoard = board;
     applyStyle(board.style);
     const rows = board.rows || [];
     panel.classList.toggle("empty", rows.length === 0);
@@ -391,13 +413,61 @@
       t.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } });
       paint();
     }
+    // in OBS: tell the tracker how big the panel really is, so Size OBS sources
+    // to fit can make the Browser source exactly that size
+    const REPORT = LIVE;
+    // Largest (Size OBS sources to fit): also how big the panel would be with every
+    // row it can have, the longest names, team badges and -$999,999 amounts
+    const largest = () => {
+      const src = [...rowsEl.children];
+      if (!style || !style.largest || !src.length || !lastBoard) return "";
+      const c = panel.cloneNode(true);
+      c.removeAttribute("id"); c.classList.remove("empty");
+      c.style.cssText = "visibility:hidden; left:0; right:auto; top:0; bottom:auto; transform:none";
+      const rows = c.querySelector(".rows"), first = src[0], other = src[1] || src[0];
+      rows.replaceChildren();
+      for (let i = 0; i < Math.max(1, style.rows || src.length); i++) {
+        const r = (i === 0 ? first : other).cloneNode(true);
+        if (i > 0) {
+          r.classList.remove("first", "iconic");
+          const rank = r.querySelector(".rank"); delete rank.dataset.mark; rank.textContent = String(i + 1);
+        }
+        const name = r.querySelector(".name");
+        if (lastBoard.names !== false) {
+          name.textContent = "W";
+          name.style.cssText = "flex:none; max-width:none; width:calc(var(--name-chars) * (1ch + var(--tracking)))";
+        }
+        r.querySelector(".amount").textContent = money("-$999,999");
+        const team = r.querySelector(".team");
+        if (lastBoard.teams && !team.childNodes.length) {
+          delete team.dataset.team; teamBadge(team, "lonestar", lastBoard.teamPics || {}, lastBoard.teamColors);
+        }
+        rows.appendChild(r);
+      }
+      document.body.appendChild(c);
+      const b = c.getBoundingClientRect(); c.remove();
+      return `lw=${Math.ceil(b.width)}&lh=${Math.ceil(b.height)}`;
+    };
+    let largestQ = "", largestAt = -1e9;
+    const sizeQuery = () => {
+      if (!REPORT || full) return "";
+      const q = [];
+      if (!panel.classList.contains("empty")) {
+        const r = panel.getBoundingClientRect();
+        q.push(`w=${Math.ceil(r.width)}&h=${Math.ceil(r.height)}`);
+      }
+      // building the biggest board is more work than a poll: once a second is plenty
+      if (performance.now() - largestAt > 1000) { largestQ = largest(); largestAt = performance.now(); }
+      if (largestQ && style && style.largest) q.push(largestQ);
+      return q.length ? "?" + q.join("&") : "";
+    };
     let busy = false;
     setInterval(async () => {
       if (busy) return;
       busy = true;
       try {
         // demo=1: the overlay editor's test players instead of your real leaderboard
-        const r = await fetch(`${SERVER}/board${P.get("demo") === "1" ? "?demo=1" : full ? "?full=1" : ""}`,
+        const r = await fetch(`${SERVER}/board${P.get("demo") === "1" ? "?demo=1" : full ? "?full=1" : sizeQuery()}`,
                               { cache: "no-store" });
         if (r.ok) render(await r.json());
       } catch (e) { /* tracker not running yet: keep the last board, try again */ }

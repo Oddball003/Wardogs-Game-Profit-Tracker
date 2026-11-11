@@ -229,6 +229,15 @@ DEFAULTS = {
     "overlay_hud_h": 0,
     "overlay_board_w": 0,             # leaderboard panel width (0: fit the names)
     "obs_fit": False,                 # size the OBS Browser sources to fit (over OBS WebSocket)
+    "obs_size_mode": "auto",          # "auto": the overlay's real size, "largest": the most it can
+                                      # ever take (amounts to -$999,999), "manual": the sizes below
+    "board_name_max": 16,             # Largest: names cut to this many characters (sizes the leaderboard)
+    "obs_hud_src_w": 400,             # manual size of the money HUD's Browser sources
+    "obs_hud_src_h": 39,
+    "obs_board_src_w": 460,           # manual size of the leaderboard's Browser source
+    "obs_board_src_h": 400,
+    "overlay_grow_x": "left",         # which way the overlays grow: "left", "center", "right"
+    "overlay_grow_y": "down",         # "down" or "up"
     "adv_open": False,                # Advanced left open last time
     "sb_open": True,                  # Advanced › Streamer.bot unfolded
     "ov_open": True,                  # Advanced › Browser overlays unfolded
@@ -254,6 +263,7 @@ DEFAULTS = {
     "team_names_tinted": True,        # leaderboard names in their team's colour
     "twitch_names": False,            # people go by their Twitch name (Steam name until linked)
     "board_pin_default": False,       # 📌 Pin by default: anyone put on the leaderboard is pinned
+    "browser": "edge",                # Advanced › Web browser (see BROWSERS)
     # Keep last amount, per output (set in the Output editor; first time: from "keep_last")
     "keep_last_hud": True,            # the money HUD overlay
     "keep_last_board": True,          # the leaderboard overlay (and Preview)
@@ -418,7 +428,8 @@ def browser_left_open(profile):
 def close_browser_using(profile):
     """Close the browser windows that use this profile (only ours: the path is ours)."""
     env = dict(os.environ, WD_PROFILE=profile)
-    script = ("$p = $env:WD_PROFILE; Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' OR Name='chrome.exe'\" | "
+    names = " OR ".join(f"Name='{exe}'" for _, _, exe in BROWSERS)
+    script = (f"$p = $env:WD_PROFILE; Get-CimInstance Win32_Process -Filter \"{names}\" | "
               "Where-Object { $_.CommandLine -and $_.CommandLine.Contains($p) } | "
               "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
     try:
@@ -460,23 +471,52 @@ def bring_to_front(title):
     return True
 
 
-def preview_browser():
-    """Edge (or Chrome) to show the leaderboard preview in its own small window."""
+# Advanced › Web browser: the Chromium browsers the tracker can drive (not Firefox)
+BROWSERS = (("edge", "Microsoft Edge", "msedge.exe"), ("chrome", "Google Chrome", "chrome.exe"),
+            ("brave", "Brave", "brave.exe"), ("vivaldi", "Vivaldi", "vivaldi.exe"), ("opera", "Opera", "opera.exe"))
+BROWSER_NAMES = {b: n for b, n, _ in BROWSERS}
+
+
+def installed_browsers():
+    """{browser id: exe path} for the ones on this PC, in BROWSERS order."""
     import winreg
-    for name in ("msedge.exe", "chrome.exe"):
+    found = {}
+    for b, _, name in BROWSERS:
         for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
             try:
                 with winreg.OpenKey(hive, "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + name) as k:
                     exe = winreg.QueryValueEx(k, "")[0]
                 if exe and os.path.exists(exe):
-                    return exe
+                    found[b] = exe
+                    break
             except OSError:
                 pass
-    for exe in (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"):
-        if os.path.exists(exe):
-            return exe
-    return ""
+    if "edge" not in found:
+        for exe in (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"):
+            if os.path.exists(exe):
+                found["edge"] = exe
+                break
+    return {b: found[b] for b, _, _ in BROWSERS if b in found}
+
+
+def browser_choice(cfg=None):
+    """(browser id, exe) to use: your choice, else Edge, else Chrome; ("edge", "") if none."""
+    found = installed_browsers()
+    for b in ((cfg or {}).get("browser", "edge"), "edge", "chrome"):
+        if b in found:
+            return b, found[b]
+    return "edge", ""
+
+
+def profile_for(base, browser):
+    """A browser's own profile folder (each has its own sign-in; Edge keeps the plain name)."""
+    return base if browser == "edge" else f"{base}_{browser}"
+
+
+def preview_browser(cfg=None):
+    """The browser to show the Preview and Output editor in, in their own windows."""
+    return browser_choice(cfg)[1]
 
 
 def twitch_login(text):
@@ -576,6 +616,9 @@ def target_files(cfg):
 
 
 HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}")
+GROW_CHOICES = {"mode": ("auto", "largest", "manual"), "x": ("left", "center", "right"), "y": ("down", "up")}
+OBS_SRC_KEYS = ("obs_hud_src_w", "obs_hud_src_h", "obs_board_src_w", "obs_board_src_h")
+NAME_MAX_RANGE = (4, 40)   # Largest: the longest name, in characters
 
 
 def fix_types(s):
@@ -655,6 +698,16 @@ def load_settings():
         s[key] = max(0, min(v, hi)) if isinstance(v, int) and not isinstance(v, bool) else DEFAULTS[key]
     if s.get("overlay_bg_mode") not in ("color", "image"):
         s["overlay_bg_mode"] = "color"
+    for key, ok in (("obs_size_mode", GROW_CHOICES["mode"]), ("overlay_grow_x", GROW_CHOICES["x"]),
+                    ("overlay_grow_y", GROW_CHOICES["y"])):
+        if s.get(key) not in ok:
+            s[key] = DEFAULTS[key]
+    for key in OBS_SRC_KEYS:
+        v = s.get(key)
+        s[key] = min(v, BOX_MAX) if isinstance(v, int) and not isinstance(v, bool) and v >= 1 else DEFAULTS[key]
+    v = s.get("board_name_max")
+    s["board_name_max"] = (max(NAME_MAX_RANGE[0], min(v, NAME_MAX_RANGE[1]))
+                           if isinstance(v, int) and not isinstance(v, bool) else DEFAULTS["board_name_max"])
     size = s.get("overlay_size")
     s["overlay_size"] = max(OVERLAY_SIZE_MIN, min(size, OVERLAY_SIZE_MAX)) if isinstance(size, int) else 18
     # folders: names kept tidy, people only in folders that exist
@@ -670,6 +723,15 @@ def load_settings():
         person["folders"] = [f for f in names if f in person.get("folders", [])]
     pics = s.get("team_pics") if isinstance(s.get("team_pics"), dict) else {}
     s["team_pics"] = {t: v for t, v in pics.items() if t in TEAM_NAMES and isinstance(v, str) and v}
+    if "browser" not in saved:
+        # a browser's own Steam sign-in folder already there: that's the one in use
+        used = [b for b, _, _ in BROWSERS if b != "edge" and os.path.isdir(profile_for(PROFILE_DIR, b))]
+        if used:
+            s["browser"] = used[0]
+        elif os.path.isdir(PROFILE_DIR):
+            adopt_old_browser(s)
+    if s.get("browser") not in BROWSER_NAMES:
+        s["browser"] = "edge"
     for k in KEEP_LAST_KEYS:   # new per-output switches start as the old single one was
         if k not in saved:
             s[k] = bool(s.get("keep_last", True))
@@ -980,7 +1042,19 @@ def overlay_style(cfg, page="hud"):
             "size": cfg["overlay_size"], "color": cfg["overlay_color"], "pl": bool(pl),
             "profit": cfg["overlay_profit_color"], "loss": cfg["overlay_loss_color"],
             "bg": cfg["overlay_bg_color"], "opacity": cfg["overlay_bg_opacity"], "image": image,
-            "hudW": cfg["overlay_hud_w"], "hudH": cfg["overlay_hud_h"], "boardW": cfg["overlay_board_w"]}
+            "hudW": cfg["overlay_hud_w"], "hudH": cfg["overlay_hud_h"], "boardW": cfg["overlay_board_w"],
+            # the corner the overlay keeps: it grows away from it
+            "anchorX": {"left": "right", "center": "center", "right": "left"}[cfg["overlay_grow_x"]],
+            "anchorY": "bottom" if cfg["overlay_grow_y"] == "up" else "top",
+            # Largest: the pages also measure the most they could ever take (names cut
+            # to nameMax characters, `rows` rows, amounts of -$999,999)
+            "largest": largest_on(cfg), "nameMax": cfg["board_name_max"],
+            "rows": cfg.get("board_top", 0) or board_count(cfg)}
+
+
+def largest_on(cfg):
+    """Size OBS sources to fit, set to the largest the overlays can be."""
+    return bool(cfg["obs_fit"]) and cfg["obs_size_mode"] == "largest"
 
 
 def board_count(cfg):
@@ -990,11 +1064,22 @@ def board_count(cfg):
     return max(1, min(n, top) if top else n)
 
 
-def obs_fit_sizes(cfg):
+def obs_fit_sizes(cfg, measured=None):
     """OBS Browser source sizes that fit each overlay: {page name: (w, h)}.
-    Generous on width (the pages are anchored top-right, so spare room is
-    simply transparent)."""
+    The size the pages report from OBS (`measured`, {(page, person): (w, h)})
+    wins: exactly the box / panel. Until a page has reported, an estimate
+    that's generous on width (the pages are anchored top-right, so spare room
+    is simply transparent)."""
     import math
+    if cfg["obs_size_mode"] == "manual":
+        return {HUD_NAME: (cfg["obs_hud_src_w"], cfg["obs_hud_src_h"]),
+                BOARD_NAME: (cfg["obs_board_src_w"], cfg["obs_board_src_h"])}
+    measured = measured or {}
+    tag = ("max",) if cfg["obs_size_mode"] == "largest" else ()
+    hud1, board1 = measured.get((HUD_NAME, 1) + tag), measured.get((BOARD_NAME, None) + tag)
+    if hud1 or board1:
+        est = obs_fit_sizes(cfg)
+        return {HUD_NAME: hud1 or est[HUD_NAME], BOARD_NAME: board1 or est[BOARD_NAME]}
     k = cfg["overlay_size"] / 18
     hud = (cfg["overlay_hud_w"] or math.ceil(320 * k), cfg["overlay_hud_h"] or math.ceil(39 * k))
     # panel: padding 10 + 8, heading 15 + 6, 1st row 42, then 32 + 1 divider per row
@@ -1004,8 +1089,51 @@ def obs_fit_sizes(cfg):
     return {HUD_NAME: hud, BOARD_NAME: board}
 
 
+def obs_source_size(cfg, measured, page, person):
+    """The size one OBS Browser source should be: the manual size, else what its
+    page measured, else the estimate."""
+    if cfg["obs_size_mode"] == "manual":
+        return obs_fit_sizes(cfg)[page]
+    key = (page, person if page == HUD_NAME else None) + (("max",) if cfg["obs_size_mode"] == "largest" else ())
+    return (measured or {}).get(key) or obs_fit_sizes(cfg)[page]
+
+
+def obs_keep_corner(client, name, old, new, cfg):
+    """Resizing a source grows / shrinks it from its alignment point. Move each
+    scene item showing `name` so the side the overlay grows away from (Grows,
+    in the Output editor) stays where it was. Rotated or bounding-box items are
+    left alone."""
+    dw, dh = new[0] - old[0], new[1] - old[1]
+    # the point that stays put, as a fraction of the width / height
+    fx = {"left": 1, "center": 0.5, "right": 0}[cfg["overlay_grow_x"]]
+    fy = 1 if cfg["overlay_grow_y"] == "up" else 0
+    if not (dw or dh):
+        return
+    for scene in client.get_scene_list().scenes:
+        sn = scene.get("sceneName", "")
+        try:
+            items = client.get_scene_item_list(sn).scene_items
+        except Exception as e:
+            if obs_request_error(e):
+                continue
+            raise
+        for it in items:
+            if it.get("sourceName") != name:
+                continue
+            t = client.get_scene_item_transform(sn, it["sceneItemId"]).scene_item_transform
+            if t.get("rotation") or t.get("boundsType", "OBS_BOUNDS_NONE") != "OBS_BOUNDS_NONE":
+                continue
+            a = int(t.get("alignment", 5))   # 1 left, 2 right, 4 top, 8 bottom (neither: centre)
+            ax = 0 if a & 1 else 1 if a & 2 else 0.5   # where the item's position point is
+            ay = 0 if a & 4 else 1 if a & 8 else 0.5
+            x = t.get("positionX", 0) - (fx - ax) * dw * t.get("scaleX", 1)
+            y = t.get("positionY", 0) - (fy - ay) * dh * t.get("scaleY", 1)
+            client.set_scene_item_transform(sn, it["sceneItemId"], {"positionX": x, "positionY": y})
+
+
 def obs_browser_sources(client):
-    """[(source name, page)] for every OBS Browser source showing one of our pages."""
+    """[(source name, page, person, (w, h))] for every OBS Browser source showing
+    one of our pages (person: the money HUD's ?person=, else None)."""
     out = []
     for item in client.get_input_list("browser_source").inputs:
         name = item.get("inputName", "")
@@ -1015,11 +1143,14 @@ def obs_browser_sources(client):
             if obs_request_error(e):
                 continue
             raise
-        where = (st.get("url", "") if not st.get("is_local_file") else st.get("local_file", "")) or ""
-        where = where.split("?")[0].replace("%20", " ")
+        full = (st.get("url", "") if not st.get("is_local_file") else st.get("local_file", "")) or ""
+        where, _, query = full.partition("?")
+        where = where.replace("%20", " ")
         for page in (HUD_NAME, BOARD_NAME):
             if where.endswith(page):
-                out.append((name, page))
+                m = re.search(r"(?:^|&)person=(\d+)", query)
+                person = (int(m.group(1)) if m else 1) if page == HUD_NAME else None
+                out.append((name, page, person, (int(st.get("width", 800)), int(st.get("height", 600)))))
     return out
 ICON_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
               ".webp": "image/webp", ".svg": "image/svg+xml"}
@@ -1068,9 +1199,20 @@ class OverlayServer:
 
     def __init__(self, port, texts, board=lambda: {"rows": []}, files=lambda: {}, style=lambda page: None,
                  api=lambda cmd, params: (404, {"ok": False, "error": "not available"}),
-                 demo=lambda kind: None, editor=None):
+                 demo=lambda kind: None, editor=None, measured=lambda key, w, h: None):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         from urllib.parse import parse_qs, urlparse
+
+        def report(q, page, person):
+            # an overlay in OBS saying how big it really is (w, h), and the most it
+            # could ever take (lw, lh) — for Size OBS sources to fit
+            for a, b, key in (("w", "h", (page, person)), ("lw", "lh", (page, person, "max"))):
+                try:
+                    w, h = int(q[a][0]), int(q[b][0])
+                except (KeyError, ValueError):
+                    continue
+                if 1 <= w <= 4000 and 1 <= h <= 4000:
+                    measured(key, w, h)
 
         class Handler(BaseHTTPRequestHandler):
             def _send(self, code, body, ctype):
@@ -1128,13 +1270,15 @@ class OverlayServer:
                     else:
                         self._send(code, json.dumps(out).encode(), "application/json")
                 elif url.path == "/value":
+                    q = parse_qs(url.query)
                     try:
-                        n = int(parse_qs(url.query).get("person", ["1"])[0])
+                        n = int(q.get("person", ["1"])[0])
                     except ValueError:
                         n = 1
-                    if parse_qs(url.query).get("demo", [""])[0] == "1":
+                    if q.get("demo", [""])[0] == "1":
                         text = demo("hud") or ""      # the Output editor's test amount
                     else:
+                        report(q, HUD_NAME, n)
                         t = texts()
                         text = t[n - 1] if 1 <= n <= len(t) else ""
                     self._send(200, json.dumps({"text": text, "style": style("hud")}).encode(), "application/json")
@@ -1145,6 +1289,8 @@ class OverlayServer:
                         data = demo("board") or {"rows": []}   # the Output editor's test players
                     else:
                         data = board(True) if full else board()
+                        if not full:
+                            report(q, BOARD_NAME, None)
                     self._send(200, json.dumps(dict(data, style=style("board"))).encode(), "application/json")
                 elif url.path in ("/icon", "/bg") or url.path.startswith("/team/"):
                     # your pictures (1st place, background, team badges), from wherever they are
@@ -1244,11 +1390,6 @@ def obs_colors(people, results, cfg):
 
 # ---------------- browser worker ----------------
 
-# Browsers built on Chromium can be driven directly; others (Firefox) can't.
-CHROMIUM_EXES = {"chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe",
-                 "chromium.exe", "opera.exe", "launcher.exe", "browser.exe"}
-
-
 def default_browser():
     """Returns (name, exe_path) of the Windows default browser, or (None, None)."""
     if os.name != "nt":
@@ -1307,25 +1448,51 @@ def edge_signed_in(profile_dir):
         return False
 
 
-def launch_browser(pw, headless, log=None):
-    """Uses your default browser if it's Chromium-based (Chrome, Edge, Brave,
-    Opera, Vivaldi...). Firefox can't be controlled this way, so it falls
-    back to Edge, then Chrome."""
-    attempts = []
-    prog_id, exe = default_browser()
-    if exe and os.path.basename(exe).lower() in CHROMIUM_EXES and os.path.exists(exe):
-        attempts.append((f"default browser ({os.path.basename(exe)})", {"executable_path": exe}))
-    elif prog_id and log:
-        log(f"Default browser ({prog_id}) isn't Chromium-based — using Edge/Chrome instead.")
-    attempts += [("Edge", {"channel": "msedge"}), ("Chrome", {"channel": "chrome"})]
+def adopt_old_browser(s):
+    """Upgrading from when the tracker used your Windows default browser: if that
+    was a Chromium browser other than Edge, stay on it and keep its Steam sign-in."""
+    _, exe = default_browser()
+    ids = {name: b for b, _, name in BROWSERS}
+    ids["launcher.exe"] = "opera"
+    b = ids.get(os.path.basename(exe or "").lower())
+    if not b or b == "edge" or not os.path.exists(exe):
+        return
+    s["browser"] = b
+    target = profile_for(PROFILE_DIR, b)
+    if not os.path.exists(target):
+        try:
+            os.rename(PROFILE_DIR, target)
+        except OSError:
+            pass
+
+
+def browser_attempts(chosen):
+    """[(browser id, how Playwright starts it)]: your choice first, then Edge, then Chrome."""
+    found = installed_browsers()
+    out = []
+    for b in dict.fromkeys((chosen, "edge", "chrome")):
+        if b == "edge":
+            out.append((b, {"channel": "msedge"}))
+        elif b == "chrome":
+            out.append((b, {"channel": "chrome"}))
+        elif b in found:
+            out.append((b, {"executable_path": found[b]}))
+    return out
+
+
+def launch_browser(pw, headless, log=None, cfg=None):
+    """Starts the browser picked in Advanced › Web browser (Edge by default) with
+    its own profile. If that one won't start, tries Edge, then Chrome."""
+    chosen = (cfg or {}).get("browser", "edge")
     last_err = None
     features = ",".join(playwright_disabled_features() + [EDGE_NO_SIGNIN])
-    for name, extra in attempts:
+    for b, extra in browser_attempts(chosen):
         try:
-            ctx = pw.chromium.launch_persistent_context(PROFILE_DIR, headless=headless,
+            ctx = pw.chromium.launch_persistent_context(profile_for(PROFILE_DIR, b), headless=headless,
                                                         args=[f"--disable-features={features}"], **extra)
             if log:
-                log(f"Using {name}.")
+                log(f"Using {BROWSER_NAMES[b]}." + ("" if b == chosen else
+                    f" ({BROWSER_NAMES.get(chosen, chosen)} wouldn't start.)"))
             return ctx
         except Exception as e:
             last_err = e
@@ -1361,7 +1528,7 @@ class Worker(threading.Thread):
     def login(self, pw):
         self.emit("status", "Waiting for Steam sign-in…", "#FACC15")
         self.log("Opening your browser — sign in to Steam there.")
-        ctx = self.ctx = launch_browser(pw, headless=False)
+        ctx = self.ctx = launch_browser(pw, headless=False, cfg=self.app.cfg)
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.goto(LOGIN_URL)
@@ -1416,14 +1583,14 @@ class Worker(threading.Thread):
     def sign_in(self, pw):
         """Leaves a headless, signed-in browser open in self.ctx; False if
         signing in didn't happen."""
-        self.ctx = launch_browser(pw, headless=True, log=self.log)
+        self.ctx = launch_browser(pw, headless=True, log=self.log, cfg=self.app.cfg)
         if self.force_login or not signed_in(self.ctx):
             self.close_ctx()
             if self.force_login:
-                shutil.rmtree(PROFILE_DIR, ignore_errors=True)
+                shutil.rmtree(profile_for(PROFILE_DIR, self.app.cfg.get("browser", "edge")), ignore_errors=True)
             if not self.login(pw):
                 return False
-            self.ctx = launch_browser(pw, headless=True)
+            self.ctx = launch_browser(pw, headless=True, cfg=self.app.cfg)
         return True
 
     # ---- live friends page ----
@@ -1431,7 +1598,7 @@ class Worker(threading.Thread):
         """Opens the Steam friends page once. It keeps a live connection to
         Steam, so your status updates arrive within seconds, no reloading."""
         if self.ctx is None:
-            self.ctx = launch_browser(pw, headless=True)
+            self.ctx = launch_browser(pw, headless=True, cfg=self.app.cfg)
         page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         page.goto(CHAT_URL, wait_until="domcontentloaded", timeout=30000)
         page.locator(".currentUserContainer").wait_for(timeout=30000)
@@ -2032,6 +2199,9 @@ class App(tk.Tk):
         self.board_path = install_hud(DATA_DIR, BOARD_NAME)
         self.hud_path = install_hud(DATA_DIR)
         self.overlay = None
+        self.overlay_measured = {}   # {(page, person): (w, h)}: overlays in OBS say how big they are
+        self._fit_said = None        # the last problem Size OBS sources to fit logged
+        self._fit_lock = threading.Lock()   # one OBS resize at a time
         if not self.cfg.get("api_key"):
             self.cfg["api_key"] = secrets.token_urlsafe(12)
             save_settings(self.cfg)
@@ -2412,6 +2582,19 @@ class App(tk.Tk):
                            AB, "#E0A458", 8)
         warn.configure(wraplength=580, justify="left")
         warn.pack(anchor="w", pady=(6, 0))
+        # which browser reads Steam and shows the Preview / Output editor
+        wb = tk.Frame(ab, bg=AB)
+        wb.pack(fill="x", pady=(10, 0))
+        self._label(wb, "Web browser", AB, TEXT).pack(side="left")
+        self.browser_var = tk.StringVar()
+        self.browser_box = ttk.Combobox(wb, textvariable=self.browser_var, state="readonly", width=20,
+                                        values=[BROWSER_NAMES[b] for b in installed_browsers()])
+        self.browser_box.pack(side="left", padx=(12, 0))
+        self.browser_box.bind("<<ComboboxSelected>>", lambda e: (e.widget.selection_clear(), self._set_browser()))
+        wb_hint = self._label(ab, "Used to read Steam, and for the Preview, the Output editor and saved "
+                                  "pictures. Each browser has its own Steam sign-in.", AB, "#8A93A3", 8)
+        wb_hint.configure(wraplength=580, justify="left")
+        wb_hint.pack(anchor="w", pady=(4, 0))
         tr = tk.Frame(ab, bg=AB)
         tr.pack(fill="x", pady=(10, 0))
         self._label(tr, "Minimize to tray", AB, TEXT).pack(side="left")
@@ -2833,13 +3016,16 @@ class App(tk.Tk):
 
     def _paint_fit(self):
         c = self.cfg
-        sizes = obs_fit_sizes(c)
+        sizes = obs_fit_sizes(c, getattr(self, "overlay_measured", None))
         hud, board = sizes[HUD_NAME], sizes[BOARD_NAME]
         text = f"Money HUD {hud[0]} × {hud[1]}  ·  Leaderboard {board[0]} × {board[1]}"
         if c["obs_fit"] and not c["obs_connect"]:
             text += "\nOBS is disconnected — press Connect in OBS WebSocket."
         elif c["obs_fit"]:
-            text += "\nKept in step automatically while OBS is connected."
+            text += {"manual": "\nWhile OBS is connected, the sources are kept at these sizes.",
+                     "largest": "\nWhile OBS is connected, each source is kept at the largest its overlay "
+                                "can be (amounts up to -$999,999), so it doesn't change size mid-game."}.get(
+                c["obs_size_mode"], "\nWhile OBS is connected, each source is kept the exact size of its overlay.")
         self.obs_fit_info.configure(text=text)
 
     def _fit_obs_soon(self):
@@ -2855,27 +3041,47 @@ class App(tk.Tk):
         c = self.cfg
         if not asked and not (c["obs_fit"] and c["obs_connect"]):
             return
-        sizes, last = obs_fit_sizes(c), getattr(self, "_fit_done", None)
+        # only the sizes this mode uses (their real size, or the largest they can be)
+        want = {"auto": 2, "largest": 3}.get(c["obs_size_mode"])
+        measured = {k: v for k, v in dict(getattr(self, "overlay_measured", {})).items() if len(k) == want}
+        sizes, last = (obs_fit_sizes(c), measured), getattr(self, "_fit_done", None)
         if not asked and sizes == last:
             return
         cfg = copy.deepcopy(c)
 
-        def say(msg, color):
-            self.events.put(("log", time.strftime("%H:%M:%S"), msg, color))
+        def say(msg, color, problem=False):
+            # the sources follow the overlays as amounts grow, so this runs often:
+            # an automatic run says a problem once, not every time
+            if problem and not asked and self._fit_said == msg:
+                return
+            self._fit_said = msg if problem else None
+            if problem or asked:
+                self.events.put(("log", time.strftime("%H:%M:%S"), msg, color))
 
         def run():
+            with self._fit_lock:
+                work()
+
+        def work():
             try:
                 cl = obs_client(cfg)
             except Exception as e:
-                say(f"OBS: couldn't connect to resize the browser sources — {e}", "#FF8A7A")
+                say(f"OBS: couldn't connect to resize the browser sources — {e}", "#FF8A7A", True)
                 return
             try:
-                found = obs_browser_sources(cl)
-                for name, page in found:
-                    w, h = sizes[page]
-                    cl.set_input_settings(name, {"width": w, "height": h}, True)
+                found = []
+                for name, page, person, old in obs_browser_sources(cl):
+                    new = obs_source_size(cfg, measured, page, person)
+                    found.append((name, new))
+                    if new != old:
+                        cl.set_input_settings(name, {"width": new[0], "height": new[1]}, True)
+                        try:
+                            obs_keep_corner(cl, name, old, new, cfg)   # stays put on screen
+                        except Exception as e:
+                            if not obs_request_error(e):
+                                raise
             except Exception as e:
-                say(f"OBS: resizing the browser sources failed — {e}", "#FF8A7A")
+                say(f"OBS: resizing the browser sources failed — {e}", "#FF8A7A", True)
                 return
             finally:
                 try:
@@ -2884,11 +3090,10 @@ class App(tk.Tk):
                     pass
             self._fit_done = sizes
             if found:
-                say("OBS: sized " + ", ".join(f'"{n}" {sizes[pg][0]}×{sizes[pg][1]}' for n, pg in found),
-                    "#5FE39B")
+                say("OBS: sized " + ", ".join(f'"{n}" {w}×{h}' for n, (w, h) in found), "#5FE39B")
             else:
                 say("OBS: no Browser source showing money_hud.html or leaderboard.html — add one "
-                    "with the Overlay link first.", "#FACC15")
+                    "with the Overlay link first.", "#FACC15", True)
         threading.Thread(target=run, daemon=True).start()
 
     def _small_color_button(self, parent, key):
@@ -2988,6 +3193,7 @@ class App(tk.Tk):
         self.save_auto_var.set(bool(c["save_on_game_over"]))
         self.board_clear_var.set(True)
         self.pin_default_var.set(bool(c["board_pin_default"]))
+        self.browser_var.set(BROWSER_NAMES[browser_choice(c)[0]])
         self.board_teams_var.set(bool(c["board_teams"]))
         self.twitch_names_var.set(bool(c["twitch_names"]))
         self.preview_full_var.set(bool(c["preview_full"]))
@@ -3332,7 +3538,7 @@ class App(tk.Tk):
     # ---- leaderboard preview window ----
     def _set_preview(self, on):
         if on and getattr(self, "preview_proc", None) is None:
-            exe = preview_browser()
+            browser, exe = browser_choice(self.cfg)
             if not exe:
                 self._add_log(time.strftime("%H:%M:%S"), "Preview needs Microsoft Edge or Chrome.", "#FACC15")
                 self.after_idle(lambda: self.preview_var.set(False))
@@ -3341,7 +3547,7 @@ class App(tk.Tk):
             self._update_overlay_server()
             # Full list is a toggle in the Preview window itself (it remembers it)
             url = overlay_link(self.board_path) + f"?stage=1&server=http://127.0.0.1:{self.cfg['overlay_port']}"
-            profile = os.path.join(DATA_DIR, "preview_browser")
+            profile = profile_for(os.path.join(DATA_DIR, "preview_browser"), browser)
             if browser_left_open(profile):   # a preview from before: ours wouldn't open
                 close_browser_using(profile)
             if edge_signed_in(profile):   # an older version let Edge sign it in: start it afresh
@@ -3393,7 +3599,7 @@ class App(tk.Tk):
             if not bring_to_front("Output editor"):
                 self._add_log(time.strftime("%H:%M:%S"), "The output editor is already open.", None)
             return
-        exe = preview_browser()
+        browser, exe = browser_choice(self.cfg)
         if not exe:
             self._add_log(time.strftime("%H:%M:%S"), "The output editor needs Microsoft Edge or Chrome.", "#FACC15")
             return
@@ -3405,7 +3611,7 @@ class App(tk.Tk):
         if not getattr(self, "editor_token", ""):
             self.editor_token = secrets.token_urlsafe(18)
         url = f"http://127.0.0.1:{self.cfg['overlay_port']}/editor?t={self.editor_token}"
-        profile = os.path.join(DATA_DIR, "editor_browser")
+        profile = profile_for(os.path.join(DATA_DIR, "editor_browser"), browser)
         if browser_left_open(profile):   # an editor from before (its page can't save any more)
             close_browser_using(profile)
         if edge_signed_in(profile):
@@ -3499,11 +3705,27 @@ class App(tk.Tk):
                         "connect": bool(c["obs_connect"]), "host": c["obs_host"], "port": c["obs_port"],
                         "passwordSet": bool(c["obs_password"]),   # the password itself never goes to the page
                         "status": list(getattr(self, "_obs_status", ("● Not used", MUTED))),
-                        "fit": bool(c["obs_fit"]), "fitText": self._fit_text()}}
+                        "fit": bool(c["obs_fit"]), "fitText": self._fit_text(),
+                        "sizeMode": c["obs_size_mode"], "growX": c["overlay_grow_x"],
+                        "nameMax": c["board_name_max"], "nameRange": list(NAME_MAX_RANGE),
+                        "growY": c["overlay_grow_y"], **{k: c[k] for k in OBS_SRC_KEYS}}}
+
+    def _overlay_measured(self, key, w, h):
+        """From the server thread: an overlay's real size, key (page, person), or the
+        most it could take, (page, person, "max"). A change resizes its OBS source."""
+        if self.overlay_measured.get(key) != (w, h):
+            self.overlay_measured[key] = (w, h)
+            self.events.put(("measured",))
 
     def _fit_text(self):
-        sizes = obs_fit_sizes(self.cfg)
+        sizes = obs_fit_sizes(self.cfg, getattr(self, "overlay_measured", None))
         hud, board = sizes[HUD_NAME], sizes[BOARD_NAME]
+        if self.cfg["obs_size_mode"] == "manual":
+            return f"Manual: Money HUD {hud[0]} × {hud[1]}  ·  Leaderboard {board[0]} × {board[1]}"
+        if self.cfg["obs_size_mode"] == "largest":
+            return (f"Largest: Money HUD {hud[0]} × {hud[1]} (fits -$999,999)  ·  Leaderboard "
+                    f"{board[0]} × {board[1]} ({board_count(self.cfg)} rows, names up to "
+                    f"{self.cfg['board_name_max']} characters)")
         return f"Money HUD {hud[0]} × {hud[1]}  ·  Leaderboard {board[0]} × {board[1]}"
 
     def _editor_set(self, data):
@@ -3511,7 +3733,7 @@ class App(tk.Tk):
         uses (so everything is checked and saved the usual way)."""
         c = self.cfg
         hexc = lambda v: "#" + str(v).strip().lstrip("#").upper()
-        need = None
+        need = reveal = None
         for key, v in data.items():
             if key in ("overlay_color", "overlay_profit_color", "overlay_loss_color", "overlay_bg_color"):
                 if not HEX_COLOR.fullmatch(hexc(v)):
@@ -3591,6 +3813,26 @@ class App(tk.Tk):
                 self.obs_port_var.set(str(p_))
             elif key == "obs_password":
                 self.obs_pass_var.set(str(v)[:200])
+            elif key == "obs_login" and isinstance(v, dict):
+                # the editor's Log in to OBS window: all three at once, then connect
+                try:
+                    port = int(float(v.get("port", 4455)))
+                except (TypeError, ValueError):
+                    port = 0
+                if not 1 <= port <= 65535:
+                    return {"ok": False, "error": "The port is a number from 1 to 65535 (OBS uses 4455)."}
+                self.obs_host_var.set(str(v.get("host", "")).strip()[:200] or "localhost")
+                self.obs_port_var.set(str(port))
+                if v.get("password") is not None:   # None: keep the saved one
+                    self.obs_pass_var.set(str(v["password"])[:200])
+                self._fit_done = None
+                if c["obs_connect"]:
+                    self._test_obs()       # the tracker reconnects with the new details by itself
+                else:
+                    self._toggle_connect()
+            elif key == "obs_reveal":
+                # 👁 Show in the login window: the saved password, only when asked for
+                reveal = c["obs_password"]
             elif key == "obs_fit":
                 self.obs_fit_var.set(bool(v))
             elif key == "obs_test":
@@ -3598,8 +3840,30 @@ class App(tk.Tk):
             elif key == "obs_connect_toggle":
                 self._toggle_connect()
             elif key == "obs_fit_now":
+                if not c["obs_connect"]:
+                    return {"ok": False, "error": "OBS isn't connected — log in to OBS first."}
                 self._fit_obs(True)
-        return dict(self._editor_state(), need=need)
+            elif key in ("obs_size_mode", "overlay_grow_x", "overlay_grow_y"):
+                if v not in GROW_CHOICES[{"obs_size_mode": "mode", "overlay_grow_x": "x"}.get(key, "y")]:
+                    return {"ok": False, "error": f"{v} isn't a choice here"}
+                c[key] = v
+                self._save_soon()
+                self._paint_fit()
+                self._fit_obs_soon()
+            elif key == "board_name_max":
+                c[key] = max(NAME_MAX_RANGE[0], min(int(float(v)), NAME_MAX_RANGE[1]))
+                self._save_soon()
+                self._paint_fit()
+                self._fit_obs_soon()
+            elif key in OBS_SRC_KEYS:
+                c[key] = max(1, min(int(float(v)), BOX_MAX))
+                self._save_soon()
+                self._paint_fit()
+                self._fit_obs_soon()
+        out = dict(self._editor_state(), need=need)
+        if reveal is not None:
+            out["password"] = reveal
+        return out
 
     def _editor_pick(self, what):
         """A picture for the editor (background, 1st place, a team badge): a
@@ -4574,6 +4838,31 @@ class App(tk.Tk):
         else:
             self.start()
 
+    def _set_browser(self):
+        """Advanced › Web browser: close what the old browser had open and carry on
+        in the new one (one you haven't used yet opens its Steam sign-in once)."""
+        b = next((i for i, n, _ in BROWSERS if n == self.browser_var.get()), "edge")
+        if b == self.cfg["browser"]:
+            return
+        self.cfg["browser"] = b
+        save_settings(self.cfg)
+        self._add_log(time.strftime("%H:%M:%S"), f"Web browser: now using {BROWSER_NAMES[b]}.", None)
+        if getattr(self, "preview_proc", None) is not None:
+            self._close_preview()
+            self.preview_var.set(False)
+        if getattr(self, "editor_proc", None) is not None:
+            self._close_editor()
+            self._update_overlay_server()
+        if self.worker and self.worker.is_alive():
+            self.stop()
+
+            def wait_then_start():
+                if self.worker and self.worker.is_alive():
+                    self.after(300, wait_then_start)
+                else:
+                    self.start()
+            wait_then_start()
+
     def _relogin(self):
         if not messagebox.askyesno(APP_NAME, "Sign out and sign in to Steam again?", parent=self):
             return
@@ -5017,7 +5306,7 @@ class App(tk.Tk):
 
         def draw():
             try:
-                snapshot_png(page, board, base + ".png")
+                snapshot_png(page, board, base + ".png", c.get("browser", "edge"))
                 self.events.put(("log", time.strftime("%H:%M:%S"), f"… and its picture: {base}.png", "#5FE39B"))
             except Exception as e:
                 self.events.put(("log", time.strftime("%H:%M:%S"),
@@ -5278,7 +5567,7 @@ class App(tk.Tk):
                                              self._api_request,
                                              lambda kind: (demo_board(self.cfg) if kind == "board"
                                                            else demo_texts(space=self.cfg["space"])[DEMO_ME]),
-                                             self._editor_http)
+                                             self._editor_http, self._overlay_measured)
             except OSError as e:
                 self.events.put(("log", time.strftime("%H:%M:%S"),
                                  f"Overlay feed couldn't start on port {self.cfg['overlay_port']} "
@@ -5405,10 +5694,16 @@ class App(tk.Tk):
                     # actually using OBS (a late one mustn't undo "Not used" / "Disconnected")
                     if len(ev) > 2 or (self.cfg["obs_connect"] and self.cfg["color_on"]):
                         self._set_obs_pill(ev[1])
+                    if ev[1] == "connected" and self.cfg["obs_connect"]:
+                        self._fit_done = None   # OBS may have restarted: size the sources again
+                        self._fit_obs_soon()
                 elif kind == "people":
                     self.current_people, self.current_board = ev[1], ev[2]
                     self._folders_tick()
                     self._show_value(self.current_text)
+                elif kind == "measured" and self.cfg["obs_size_mode"] != "manual":
+                    self._paint_fit()
+                    self._fit_obs_soon()
                 elif kind == "ingame":
                     self.ingame_friends = ev[1]
                 elif kind == "acct":
@@ -5597,7 +5892,7 @@ def standings_text(rows, when):
     return "\n".join(lines) + "\n"
 
 
-def snapshot_png(page_path, board, out):
+def snapshot_png(page_path, board, out, browser="edge"):
     """Draws the leaderboard overlay page in a hidden browser and saves just the
     panel as a PNG with a see-through background."""
     from urllib.parse import quote
@@ -5605,7 +5900,7 @@ def snapshot_png(page_path, board, out):
     url = overlay_link(page_path) + "?snapshot=1#" + quote(json.dumps(board))
     with sync_playwright() as pw:
         last = None
-        for extra in ({"channel": "msedge"}, {"channel": "chrome"}):
+        for _, extra in browser_attempts(browser):
             try:
                 br = pw.chromium.launch(headless=True, **extra)
                 break

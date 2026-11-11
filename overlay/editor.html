@@ -36,6 +36,7 @@
   .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; }
   .row > label:first-child, .lbl { color: var(--label); min-width: 92px; }
   .hint { color: var(--hint); font-size: 12px; margin: 6px 0 0; }
+  .warn { color: #FF8A7A; font-size: 12px; margin: 6px 0 0; }
   select, input[type=number] { background: var(--dark); color: var(--text); border: 1px solid var(--border);
                                border-radius: 5px; padding: 5px 8px; font: inherit; }
   select { max-width: 230px; }
@@ -62,6 +63,14 @@
   .file-name { color: var(--hint); font-size: 12px; }
   .pill { font-size: 12px; font-weight: 600; margin-left: 8px; }
   details > summary { cursor: pointer; color: var(--label); font-size: 13px; margin: 8px 0; }
+  /* Log in to OBS: a window over the editor */
+  .modal { position: fixed; inset: 0; z-index: 10; background: rgba(0,0,0,.55); display: flex;
+           align-items: center; justify-content: center; }
+  .modal .box { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px;
+                width: 380px; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  .modal h2 { font-size: 15px; margin: 0 0 6px; }
+  .modal .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   input[type=text], input[type=password] { background: var(--dark); color: var(--text); border: 1px solid var(--border);
                                            border-radius: 5px; padding: 5px 8px; font: inherit; width: 170px; }
 </style>
@@ -168,6 +177,35 @@
     <p class="hint">0 = fit the text.<span id="board-box-note"> The leaderboard's height follows its rows.</span></p>
   </section>
 
+  <section id="src-sec">
+    <h2>OBS Browser source</h2>
+    <div class="row obs-btns"><button class="act obs-login-btn"></button><button class="act obs-test">Test</button><button class="act obs-connect"></button></div>
+    <div class="row"><span class="chip" id="obs-fit">⤢ Size OBS sources to fit</span>
+      <button class="act" id="obs-fit-now">Resize in OBS now</button></div>
+    <p class="warn hidden" id="src-warn"></p>
+    <div id="fit-opts">
+      <div class="row"><span class="lbl">Size</span>
+        <span class="seg" id="fit-mode-seg"><button data-v="auto">Fit the overlay</button><button data-v="largest">Largest</button><button data-v="manual">Manual</button></span></div>
+      <div class="row" id="name-max-row"><span class="lbl">Longest name</span>
+        <input type="number" id="name-max" min="4" max="40"> characters</div>
+      <p class="hint" id="largest-hint">Largest: each source is as big as its overlay can get — amounts up to
+        -$999,999, and on the leaderboard every row (How many, or everyone on it) with team badges and the
+        longest name. Longer names are cut with "…". The size stays the same mid-game.</p>
+      <div class="row" id="src-hud-row"><span class="lbl">Money HUD</span>
+        W <input type="number" id="src-hud-w" min="1" step="10"> H <input type="number" id="src-hud-h" min="1"></div>
+      <div class="row" id="src-board-row"><span class="lbl">Leaderboard</span>
+        W <input type="number" id="src-board-w" min="1" step="10"> H <input type="number" id="src-board-h" min="1" step="10"></div>
+    </div>
+    <p class="hint" id="obs-fit-text"></p>
+    <div class="row"><span class="lbl">Grows</span>
+      <span class="seg" id="grow-x-seg"><button data-v="left">← Left</button><button data-v="center">↔ Both</button><button data-v="right">→ Right</button></span></div>
+    <div class="row"><span class="lbl"></span>
+      <span class="seg" id="grow-y-seg"><button data-v="down">↓ Down</button><button data-v="up">↑ Up</button></span></div>
+    <p class="hint">Which way the overlays grow as amounts get longer or people join. The opposite
+      corner stays put in OBS, and with a bigger source the overlay sits in that corner. Sizing needs
+      OBS connected.</p>
+  </section>
+
   <section id="obs-sec">
     <h2>OBS WebSocket<span class="pill" id="obs-pill"></span></h2>
     <div class="row"><span class="chip" id="color-on">🎨 Color by profit / loss</span></div>
@@ -175,18 +213,23 @@
       <label for="app-loss" style="min-width:0;margin-left:14px;color:var(--label)">Loss</label><input type="color" id="app-loss"></div>
     <p class="hint">Colours the amount in the app and each person's OBS Text source (set on their card,
       under Save to file).</p>
-    <details id="obs-conn"><summary>Connection</summary>
-      <div class="row"><label for="obs-host">Host</label><input type="text" id="obs-host"></div>
-      <div class="row"><label for="obs-port">Port</label><input type="number" id="obs-port" min="1" max="65535"></div>
-      <div class="row"><label for="obs-pass">Password</label><input type="password" id="obs-pass" autocomplete="off"></div>
-      <p class="hint">In OBS: Tools › WebSocket Server Settings › Show Connect Info.</p>
-    </details>
-    <div class="row"><button class="act" id="obs-test">Test</button><button class="act" id="obs-connect"></button></div>
-    <div class="row"><span class="chip" id="obs-fit">⤢ Size OBS sources to fit</span>
-      <button class="act" id="obs-fit-now">Resize in OBS now</button></div>
-    <p class="hint" id="obs-fit-text"></p>
+    <div class="row obs-btns"><button class="act obs-login-btn"></button><button class="act obs-test">Test</button><button class="act obs-connect"></button></div>
   </section>
 </aside>
+
+<div class="modal hidden" id="obs-login" role="dialog" aria-modal="true" aria-labelledby="ol-title">
+  <div class="box">
+    <h2 id="ol-title">Log in to OBS</h2>
+    <p class="hint">In OBS: Tools › WebSocket Server Settings › Show Connect Info.</p>
+    <div class="row"><label for="ol-host">Host</label><input type="text" id="ol-host" autocomplete="off"></div>
+    <div class="row"><label for="ol-port">Port</label><input type="number" id="ol-port" min="1" max="65535"></div>
+    <div class="row"><label for="ol-pass">Password</label><input type="password" id="ol-pass" autocomplete="off">
+      <button class="act" id="ol-show" type="button">👁 Show</button></div>
+    <p class="warn hidden" id="ol-err"></p>
+    <div class="buttons"><button class="act" id="ol-cancel" type="button">Cancel</button>
+      <button class="act primary" id="ol-save" type="button">Save &amp; connect</button></div>
+  </div>
+</div>
 
 <script>
   const T = new URLSearchParams(location.search).get("t") || "";
@@ -247,7 +290,9 @@
         $("font").appendChild(g); };
       add("Web fonts", st.fonts); if (st.installed.length) add("Installed on this PC", st.installed);
       $("size").min = $("size-n").min = st.sizeMin; $("size").max = $("size-n").max = st.sizeMax;
-      $("top-n").max = st.topMax; for (const id of ["hud-w", "hud-h", "board-w"]) $(id).max = st.boxMax;
+      $("top-n").max = st.topMax;
+      for (const id of ["hud-w", "hud-h", "board-w", "src-hud-w", "src-hud-h", "src-board-w", "src-board-h"])
+        $(id).max = st.boxMax;
     }
     if (![...$("font").options].some(o => o.value === v.overlay_font)) {
       const o = document.createElement("option"); o.value = o.textContent = v.overlay_font; $("font").prepend(o);
@@ -311,12 +356,29 @@
     chip("color-on", o.colorOn);
     val("app-profit", o.profit.toLowerCase()); val("app-loss", o.loss.toLowerCase());
     $("app-profit").parentElement.classList.toggle("hidden", !o.colorOn);   // colours only while it's on
-    val("obs-host", o.host); val("obs-port", o.port);
-    $("obs-pass").placeholder = o.passwordSet ? "•••••• (saved — type to change)" : "none";
-    $("obs-connect").textContent = o.connect ? "Disconnect" : "Connect";
+    for (const b of document.querySelectorAll(".obs-login-btn"))
+      b.textContent = o.connect ? "✏ Edit OBS login" : "🔑 Log in to OBS";
+    for (const b of document.querySelectorAll(".obs-connect")) b.textContent = o.connect ? "Disconnect" : "Connect";
     chip("obs-fit", o.fit);
-    $("obs-fit-text").textContent = o.fitText + (o.fit ? (o.connect ? " — kept in step while OBS is connected."
-                                                                   : " — OBS is disconnected: press Connect.") : "");
+    $("fit-opts").classList.toggle("hidden", !o.fit);
+    seg("fit-mode-seg", o.sizeMode);
+    for (const id of ["src-hud-row", "src-board-row"])   // the manual sizes: only while Manual
+      $(id).classList.toggle("hidden", o.sizeMode !== "manual");
+    $("name-max-row").classList.toggle("hidden", o.sizeMode !== "largest");
+    $("largest-hint").classList.toggle("hidden", o.sizeMode !== "largest");
+    $("name-max").min = o.nameRange[0]; $("name-max").max = o.nameRange[1];
+    val("name-max", o.nameMax);
+    val("src-hud-w", o.obs_hud_src_w); val("src-hud-h", o.obs_hud_src_h);
+    val("src-board-w", o.obs_board_src_w); val("src-board-h", o.obs_board_src_h);
+    seg("grow-x-seg", o.growX); seg("grow-y-seg", o.growY);
+    $("obs-fit-text").textContent = o.fitText + (o.fit && o.connect ? " — kept in step while OBS is connected." : "");
+    // sizing needs OBS: say so plainly when it isn't there
+    const warn = !o.fit ? ""
+      : !o.connect ? "⚠ OBS isn't connected."
+      : o.status[0] === "● Not connected" ? "⚠ Can't reach OBS — is it open?"
+      : "";
+    $("src-warn").textContent = warn;
+    $("src-warn").classList.toggle("hidden", !warn);
   }
 
   function fileLabel() {
@@ -337,8 +399,8 @@
     // only what this output uses is shown: overlays get the look (text, colours,
     // background, box size); text files get the money format and OBS WebSocket
     const show = {
-      board: ["text-sec", "format-sec", "pl-sec", "bg-sec", "board-sec", "box-sec"],
-      hud: ["text-sec", "format-sec", "pl-sec", "bg-sec", "hud-sec", "box-sec"],
+      board: ["text-sec", "format-sec", "pl-sec", "bg-sec", "board-sec", "box-sec", "src-sec"],
+      hud: ["text-sec", "format-sec", "pl-sec", "bg-sec", "hud-sec", "box-sec", "src-sec"],
       file: ["format-sec", "file-sec", "obs-sec"],
       boardfile: ["format-sec", "board-sec", "boardfile-sec", "obs-sec"],
     }[p];
@@ -346,6 +408,9 @@
     // in the leaderboard section, the overlay-only parts (teams, 1st place, its Keep last) go for the txt
     for (const el of document.querySelectorAll("#board-sec .ov-only")) el.classList.toggle("off", p !== "board");
     $("hud-box").classList.toggle("off", p !== "hud");
+    $("src-hud-row").classList.toggle("off", p !== "hud");
+    $("src-board-row").classList.toggle("off", p !== "board");
+    $("name-max-row").classList.toggle("off", p !== "board");
     $("board-box").classList.toggle("off", p !== "board");
     $("board-box-note").classList.toggle("off", p !== "board");
     $("pl").classList.toggle("off", p !== "hud");
@@ -403,15 +468,67 @@
   $("color-on").addEventListener("click", () => set({ color_on: !S.obs.colorOn }));
   $("app-profit").addEventListener("input", e => soon("profit_color", e.target.value));
   $("app-loss").addEventListener("input", e => soon("loss_color", e.target.value));
-  $("obs-host").addEventListener("change", e => set({ obs_host: e.target.value }));
-  $("obs-port").addEventListener("change", e => set({ obs_port: +e.target.value || 4455 }));
-  $("obs-pass").addEventListener("change", e => {   // sent once, then the box empties again
-    const v = e.target.value; e.target.value = ""; set({ obs_password: v });
+  // Log in to OBS: a window with the three details, saved together (not on every change)
+  let passTouched = false, passShown = false;
+  function loginOpen() {
+    if (!S) return;           // the tracker hasn't answered yet
+    const o = S.obs;
+    $("ol-host").value = o.host; $("ol-port").value = o.port;
+    // the saved password stays hidden: 👁 Show fetches it, typing replaces it
+    $("ol-pass").value = ""; $("ol-pass").type = "password";
+    $("ol-pass").placeholder = o.passwordSet ? "•••••••• (saved)" : "none";
+    $("ol-show").textContent = "👁 Show"; passTouched = passShown = false;
+    $("ol-err").classList.add("hidden");
+    $("obs-login").classList.remove("hidden");
+    $("ol-host").focus();
+  }
+  let loginFrom = null;   // the button that opened it, focused again on close
+  function loginClose() {
+    $("obs-login").classList.add("hidden"); $("ol-pass").value = "";
+    if (loginFrom) loginFrom.focus();
+  }
+  for (const b of document.querySelectorAll(".obs-login-btn"))
+    b.addEventListener("click", () => { loginFrom = b; loginOpen(); });
+  $("ol-cancel").addEventListener("click", loginClose);
+  $("obs-login").addEventListener("mousedown", e => { if (e.target === e.currentTarget) loginClose(); });
+  $("obs-login").addEventListener("keydown", e => {
+    if (e.key === "Escape") loginClose();
+    else if (e.key === "Enter" && e.target.tagName === "INPUT") $("ol-save").click();
   });
-  $("obs-test").addEventListener("click", () => set({ obs_test: true }));
-  $("obs-connect").addEventListener("click", () => set({ obs_connect_toggle: true }));
+  $("ol-pass").addEventListener("input", () => { passTouched = true; });
+  $("ol-show").addEventListener("click", async () => {
+    passShown = !passShown;
+    if (passShown && !passTouched && S.obs.passwordSet) {
+      try { $("ol-pass").value = (await call("/editor/set", { obs_reveal: true })).password || ""; }
+      catch (e) { passShown = false; $("ol-err").textContent = e.message; $("ol-err").classList.remove("hidden"); return; }
+    }
+    $("ol-pass").type = passShown ? "text" : "password";
+    $("ol-show").textContent = passShown ? "🙈 Hide" : "👁 Show";
+  });
+  $("ol-save").addEventListener("click", async () => {
+    const login = { host: $("ol-host").value, port: +$("ol-port").value };
+    if (passTouched) login.password = $("ol-pass").value;
+    sending++; status("Connecting to OBS…");
+    try {
+      fill(await call("/editor/set", { obs_login: login }));
+      loginClose(); status("Saved ✓ — connecting to OBS");
+    } catch (e) {
+      $("ol-err").textContent = e.message; $("ol-err").classList.remove("hidden"); status(e.message, true);
+    }
+    sending--;
+  });
+  for (const b of document.querySelectorAll(".obs-test")) b.addEventListener("click", () => set({ obs_test: true }));
+  for (const b of document.querySelectorAll(".obs-connect"))
+    b.addEventListener("click", () => set({ obs_connect_toggle: true }));
   $("obs-fit").addEventListener("click", () => set({ obs_fit: !S.obs.fit }));
   $("obs-fit-now").addEventListener("click", () => set({ obs_fit_now: true }));
+  onSeg("fit-mode-seg", v => set({ obs_size_mode: v }));
+  $("name-max").addEventListener("change", e => set({ board_name_max: +e.target.value || 16 }));
+  onSeg("grow-x-seg", v => set({ overlay_grow_x: v }));
+  onSeg("grow-y-seg", v => set({ overlay_grow_y: v }));
+  for (const [id, key] of [["src-hud-w", "obs_hud_src_w"], ["src-hud-h", "obs_hud_src_h"],
+                           ["src-board-w", "obs_board_src_w"], ["src-board-h", "obs_board_src_h"]])
+    $(id).addEventListener("change", e => set({ [key]: Math.max(1, +e.target.value || 1) }));
 
   (async () => {
     try { fill(await call("/editor/state")); status("Ready"); }

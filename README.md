@@ -42,7 +42,8 @@ Grab `Wardogs.Profit.Tracker.exe` from the
 [latest release](../../releases/latest), put it in a normal folder (for example
 a "Wardogs" folder on your desktop) and run it. Nothing else to install:
 everything it needs is inside the exe, and it uses Microsoft Edge (part of
-Windows 10 / 11) in the background.
+Windows 10 / 11) in the background. You can pick another Chromium browser in
+**Advanced › Web browser**.
 
 Windows may show a SmartScreen warning because the exe isn't signed: click
 **More info → Run anyway**.
@@ -102,6 +103,10 @@ Steam account, so a name change doesn't lose them. Each card has:
 - **Hide overlays on stream**: the overlays show nothing until you turn it off.
 - **Refresh friends page**: off by default, since the page updates live; only
   pick a time if the number stops updating.
+- **Web browser**: Edge by default, or Chrome, Brave, Vivaldi or Opera if
+  they're installed. It reads Steam and shows the Preview, the Output editor
+  and saved pictures. Each browser has its own Steam sign-in, so one you
+  haven't used yet asks you to sign in once. (Firefox can't be used.)
 - **Streamer.bot**: see below.
 
 ## Output editor
@@ -129,10 +134,16 @@ away and shows on stream within a moment.
   amount in menus instead of going blank.
 - **OBS WebSocket**:
   - **Color by profit / loss** for the app and each person's OBS Text source.
-  - Connection details, folded away so the password isn't on screen.
+  - **🔑 Log in to OBS**: a small window for the host, port and password, saved
+    together and connected straight away. The saved password stays hidden until
+    you press **👁 Show**.
   - Test and Connect / Disconnect.
-  - **Size OBS sources to fit**, which resizes the overlays' Browser sources
-    in OBS for you.
+  - **Size OBS sources to fit**, which keeps the overlays' Browser sources in
+    OBS the exact size of what they show, the largest they can get
+    (**Largest**: amounts up to -$999,999, every row, team badges and a longest
+    name you set), or a size you type (**Manual**).
+  - **Grows**: which way the overlays grow (left, both ways or right; down or
+    up), with the opposite corner kept in place.
 
 ## Overlays in OBS
 
